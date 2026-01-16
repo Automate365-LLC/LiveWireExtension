@@ -11,7 +11,6 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 from collections import deque
-from fastapi import FastAPI
 from services.a365_integration import push_to_a365
 from services.guardrails import GuardrailEngine
 
@@ -51,11 +50,8 @@ async def handle_objection(objection_data: dict):
 async def reset_guardrails():
     guardrails.reset()
     return {"status": "reset"}
-# Initialize OpenAI client
-# REPLACE WITH YOUR KEY or set OPENAI_API_KEY environment variable
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-app = FastAPI()
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,7 +61,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global storage - per session/ call
 active_sessions: Dict[str, Dict] = {}
 client_info: Dict[str, str] = {}
 conversation_history: List[Dict] = []
@@ -73,7 +68,6 @@ current_call_transcript: List[Dict] = []
 
 @app.get("/")
 def serve_index():
-    """Serve the HTML interface"""
     try:
         with open("index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(f.read())
@@ -82,7 +76,6 @@ def serve_index():
 
 @app.post("/upload_client_info")
 async def upload_client_info(file: UploadFile = File(None), client_name: str = Form(None), client_notes: str = Form(None)):
-    """Upload client information (PDF or text notes)"""
     global client_info
     
     try:
@@ -121,7 +114,6 @@ async def upload_client_info(file: UploadFile = File(None), client_name: str = F
 
 @app.post("/transcribe_audio")
 async def transcribe_audio(file: UploadFile = File(...)):
-    """Transcribe audio to text using Whisper"""
     tmp_path = None
     try:
         file_ext = ".webm"
@@ -174,21 +166,15 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
 @app.post("/submit_transcript")
 async def submit_transcript(text: str = Form(...)):
-    """
-    Append a new piece of transcript to the history.
-    This is separated from analysis to prevent data duplication.
-    """
     global current_call_transcript, conversation_history
     
     timestamp = datetime.now().isoformat()
     
-    # Add to internal call state
     current_call_transcript.append({
         "text": text,
         "timestamp": timestamp
     })
     
-    # Add to history log
     conversation_history.append({
         "role": "user",
         "content": text,
@@ -199,7 +185,6 @@ async def submit_transcript(text: str = Form(...)):
 
 @app.post("/analyze_conversation")
 async def analyze_conversation(client_id: str = Form("default_client")):
-    """Real-time conversation analysis based on current server state"""
     global client_info, current_call_transcript
     
     try:
@@ -208,14 +193,11 @@ async def analyze_conversation(client_id: str = Form("default_client")):
                 "status": "success",
                 "message": "No transcript to analyze yet"
             })
-
-        # Use more recent context for better real-time suggestions
-        # We take the last 15 chunks to ensure we have enough context
+        
         recent_transcript = "\n".join([t["text"] for t in current_call_transcript[-15:]])
         
         system_message = """You are an AI sales co-pilot providing real-time assistance during a live sales conversation. 
 Your goal is to be helpful and proactive, offering useful insights and suggestions to help the sales rep succeed.
-
 Provide helpful suggestions when you notice:
 1. Customer objections, concerns, or hesitations that need addressing
 2. Questions from the customer that need clear answers
@@ -224,10 +206,8 @@ Provide helpful suggestions when you notice:
 5. Moments where the sales rep could benefit from guidance
 6. Natural conversation transitions where a helpful response would be valuable
 7. Key information about the customer that should be remembered or acted upon
-
 Be proactive but not overwhelming. For normal flowing conversation, provide brief, helpful context or reminders.
 For important moments (objections, questions, opportunities), provide more detailed guidance.
-
 Your response MUST be in JSON format:
 {
   "suggestion": "Brief, helpful context about what's happening in the conversation",
@@ -235,7 +215,6 @@ Your response MUST be in JSON format:
   "recommended_response": "A helpful phrase or question the sales rep could say next (if relevant)",
   "insight_type": "objection_handling|next_step|key_info|response_suggestion|close_opportunity"
 }
-
 Even for normal conversation, provide brief helpful context. Only leave fields empty if the transcript is truly unclear or just noise."""
         
         context_text = ""
@@ -244,10 +223,8 @@ Even for normal conversation, provide brief helpful context. Only leave fields e
             context_text = f"\n\nCLIENT CONTEXT:\n{context_preview}\n"
         
         user_message = f"""Here's the recent conversation transcript:
-
 {recent_transcript}
 {context_text}
-
 Analyze this conversation and provide helpful, actionable suggestions. What's happening? What should the sales rep be aware of or consider saying next? Be helpful and proactive."""
         
         response = client.chat.completions.create(
@@ -286,7 +263,6 @@ Analyze this conversation and provide helpful, actionable suggestions. What's ha
 
 @app.post("/clear_context")
 async def clear_context():
-    """Clear conversation history"""
     global conversation_history, current_call_transcript
     conversation_history = []
     current_call_transcript = []
@@ -294,7 +270,6 @@ async def clear_context():
 
 @app.post("/start_call")
 async def start_call(client_id: str = Form("default_client")):
-    """Initialize a new call session"""
     global current_call_transcript, active_sessions
     call_id = f"call_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     current_call_transcript = []
@@ -311,7 +286,6 @@ async def start_call(client_id: str = Form("default_client")):
 
 @app.post("/end_call")
 async def end_call(call_id: str = Form(...)):
-    """End call and get summary"""
     global active_sessions, current_call_transcript
     
     try:
@@ -323,10 +297,8 @@ async def end_call(call_id: str = Form(...)):
 3. Next steps agreed upon
 4. Concerns or objections raised
 5. Overall call sentiment
-
 TRANSCRIPT:
 {full_transcript[:4000]}
-
 Provide a concise summary in bullet format."""
         
         summary_response = client.chat.completions.create(
@@ -356,7 +328,6 @@ Provide a concise summary in bullet format."""
 
 @app.get("/get_history")
 async def get_history():
-    """Get conversation history"""
     return JSONResponse({
         "status": "success",
         "history": conversation_history,
