@@ -11,7 +11,46 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 from collections import deque
+from fastapi import FastAPI
+from services.a365_integration import push_to_a365
+from services.guardrails import GuardrailEngine
 
+app = FastAPI()
+guardrails = GuardrailEngine()
+
+@app.post("/api/a365/push")
+async def a365_push_endpoint(payload: dict):
+    try:
+        summary = payload.get("summary", "")
+        tasks = payload.get("tasks", [])
+        tags = payload.get("tags", [])
+        
+        result = push_to_a365(summary, tasks, tags)
+        
+        return {
+            "status": "success",
+            "pushed": result,
+            "mock": True
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.post("/api/objection-detected")
+async def handle_objection(objection_data: dict):
+    objection_type = objection_data.get("type")
+    
+    if not guardrails.should_show_card(objection_type):
+        return {"status": "blocked", "reason": "guardrails"}
+    
+    return {"status": "show_card", "data": objection_data}
+
+@app.post("/api/guardrails/reset")
+async def reset_guardrails():
+    guardrails.reset()
+    return {"status": "reset"}
 # Initialize OpenAI client
 # REPLACE WITH YOUR KEY or set OPENAI_API_KEY environment variable
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
