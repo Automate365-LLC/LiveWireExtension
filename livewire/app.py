@@ -1,339 +1,330 @@
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
-from pypdf import PdfReader
-import uvicorn
-import tempfile
-import os
-import json
-import asyncio
-from datetime import datetime
-from typing import Dict, List, Optional
-from collections import deque
+from flask import Flask, request, jsonify, render_template_string
+from flask_cors import CORS
+import openai
+import base64
+import mimetypes
+import io
+from PyPDF2 import PdfReader
 
-# Initialize OpenAI client
-# REPLACE WITH YOUR KEY or set OPENAI_API_KEY environment variable
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+app = Flask(__name__)
+CORS(app)
 
-app = FastAPI()
+# --- HARDCODED API KEY ---
+HARDCODED_KEY = 
+# --- SYSTEM PERSONA ---
+# This controls how the AI acts and forces it to be short
+SYSTEM_PROMPT = """
+You are a 'Little Helper'. You are enthusiastic, kind, and helpful.
+CRITICAL INSTRUCTION: Keep your responses VERY SHORT (under 2 sentences). 
+Do not lecture. Just give the answer or a quick suggestion. 
+If you need to summarize a file, do it in bullet points but keep it brief.
+"""
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# --- HTML TEMPLATE ---
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Little Helper Assistant</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0a0a; color: #fff;
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            padding: 20px; overflow: hidden; position: relative;
+        }
+        body::before {
+            content: ''; position: fixed; top: -50%; left: -50%; width: 200%; height: 200%;
+            background: radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3), transparent 50%),
+                        radial-gradient(circle at 80% 80%, rgba(74, 86, 226, 0.3), transparent 50%);
+            z-index: 0;
+        }
+        .container {
+            position: relative; z-index: 1; width: 100%; max-width: 900px;
+            background: rgba(20, 20, 25, 0.7); backdrop-filter: blur(40px);
+            border-radius: 32px; padding: 48px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .header { text-align: center; margin-bottom: 30px; }
+        h1 {
+            font-size: 2.5rem; font-weight: 700;
+            background: linear-gradient(135deg, #fff 0%, #a78bfa 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        #chat-history {
+            height: 400px; overflow-y: auto; padding: 24px; margin-bottom: 20px;
+            background: rgba(0, 0, 0, 0.2); border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .msg { margin-bottom: 16px; display: flex; animation: fade 0.4s; }
+        @keyframes fade { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .msg-content { max-width: 75%; padding: 14px 18px; border-radius: 18px; font-size: 0.95rem; line-height: 1.5; }
+        .user-msg { justify-content: flex-end; }
+        .user-msg .msg-content { background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); color: #fff; }
+        .ai-msg { justify-content: flex-start; }
+        .ai-msg .msg-content { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.1); }
+        
+        .controls { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
+        button { padding: 16px 30px; border: none; border-radius: 16px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
+        #startBtn { background: #7c3aed; color: white; flex: 1; min-width: 150px; }
+        #stopBtn { background: #ef4444; color: white; display: none; flex: 1; min-width: 150px; }
+        #clearBtn { background: rgba(255,255,255,0.1); color: white; }
+        
+        .file-wrapper { position: relative; }
+        input[type="file"] { display: none; }
+        .file-btn {
+            background: rgba(255,255,255,0.1); color: white; padding: 16px; border-radius: 16px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .file-btn:hover { background: rgba(255,255,255,0.2); }
+        .file-btn.has-file { background: #22c55e; border-color: #22c55e; }
+        .file-preview {
+            position: absolute; bottom: 110%; left: 0; background: #22c55e; color: black;
+            padding: 4px 8px; border-radius: 8px; font-size: 0.75rem; white-space: nowrap; display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Little Helper</h1>
+            <div class="subtitle">Fast, Short, & Helpful</div>
+        </div>
 
-# Global storage - per session/ call
-active_sessions: Dict[str, Dict] = {}
-client_info: Dict[str, str] = {}
-conversation_history: List[Dict] = []
-current_call_transcript: List[Dict] = []
+        <div id="chat-history"></div>
 
-@app.get("/")
-def serve_index():
-    """Serve the HTML interface"""
-    try:
-        with open("index.html", "r", encoding="utf-8") as f:
-            return HTMLResponse(f.read())
-    except FileNotFoundError:
-        return HTMLResponse("<h1>Error: index.html not found</h1>")
+        <div class="controls">
+            <div class="file-wrapper">
+                <div id="filePreview" class="file-preview"></div>
+                <label for="fileInput" class="file-btn" id="fileBtnLabel">📎</label>
+                <input type="file" id="fileInput">
+            </div>
+            <button id="startBtn">Start Listening</button>
+            <button id="stopBtn">Stop</button>
+            <button id="clearBtn">Clear</button>
+        </div>
+    </div>
 
-@app.post("/upload_client_info")
-async def upload_client_info(file: UploadFile = File(None), client_name: str = Form(None), client_notes: str = Form(None)):
-    """Upload client information (PDF or text notes)"""
-    global client_info
+<script>
+    const BACKEND_URL = '/chat';
+    const chatHistory = document.getElementById('chat-history');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const fileInput = document.getElementById('fileInput');
+    const fileBtnLabel = document.getElementById('fileBtnLabel');
+    const filePreview = document.getElementById('filePreview');
     
-    try:
-        client_id = client_name or "default_client"
-        client_context = ""
-        
-        if file and file.filename.lower().endswith('.pdf'):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                content = await file.read()
-                tmp.write(content)
-                tmp_path = tmp.name
-            
-            reader = PdfReader(tmp_path)
-            text_parts = []
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    text_parts.append(text)
-            
-            client_context = "\n\n".join(text_parts)
-            os.unlink(tmp_path)
-        
-        if client_notes:
-            client_context += f"\n\nAdditional Notes:\n{client_notes}"
-        
-        client_info[client_id] = client_context
-        
-        return JSONResponse({
-            "status": "success",
-            "message": f"Client information loaded for {client_id}",
-            "client_id": client_id
-        })
-        
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": f"Failed to process client info: {str(e)}"})
+    let recognition;
+    let isActive = false;
+    let isAiTalking = false;
+    let conversation = [];
 
-@app.post("/transcribe_audio")
-async def transcribe_audio(file: UploadFile = File(...)):
-    """Transcribe audio to text using Whisper"""
-    tmp_path = None
-    try:
-        file_ext = ".webm"
-        if file.filename:
-            if file.filename.endswith('.wav'):
-                file_ext = ".wav"
-            elif file.filename.endswith('.mp3'):
-                file_ext = ".mp3"
-            elif file.filename.endswith('.m4a'):
-                file_ext = ".m4a"
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-            content = await file.read()
-            if len(content) == 0:
-                return JSONResponse({"status": "error", "message": "Empty audio file"})
-            tmp.write(content)
-            tmp_path = tmp.name
-        
-        with open(tmp_path, "rb") as audio_file:
-            transcription = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="en",
-                temperature=0.0
-            )
-        
-        try:
-            os.unlink(tmp_path)
-            tmp_path = None
-        except:
-            pass
-        
-        text = transcription.text.strip() if hasattr(transcription, 'text') and transcription.text else str(transcription).strip()
-        
-        if not text:
-            return JSONResponse({"status": "error", "message": "No transcription text received"})
-        
-        return JSONResponse({
-            "status": "success",
-            "text": text
-        })
-        
-    except Exception as e:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except:
-                pass
-        return JSONResponse({"status": "error", "message": f"Transcription failed: {str(e)}"})
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length > 0) {
+            fileBtnLabel.classList.add('has-file');
+            filePreview.textContent = fileInput.files[0].name;
+            filePreview.style.display = 'block';
+        } else {
+            fileBtnLabel.classList.remove('has-file');
+            filePreview.style.display = 'none';
+        }
+    });
 
-@app.post("/submit_transcript")
-async def submit_transcript(text: str = Form(...)):
-    """
-    Append a new piece of transcript to the history.
-    This is separated from analysis to prevent data duplication.
-    """
-    global current_call_transcript, conversation_history
-    
-    timestamp = datetime.now().isoformat()
-    
-    # Add to internal call state
-    current_call_transcript.append({
-        "text": text,
-        "timestamp": timestamp
-    })
-    
-    # Add to history log
-    conversation_history.append({
-        "role": "user",
-        "content": text,
-        "timestamp": timestamp
-    })
-    
-    return JSONResponse({"status": "success"})
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
 
-@app.post("/analyze_conversation")
-async def analyze_conversation(client_id: str = Form("default_client")):
-    """Real-time conversation analysis based on current server state"""
-    global client_info, current_call_transcript
-    
-    try:
-        if not current_call_transcript:
-            return JSONResponse({
-                "status": "success",
-                "message": "No transcript to analyze yet"
-            })
-
-        # Use more recent context for better real-time suggestions
-        # We take the last 15 chunks to ensure we have enough context
-        recent_transcript = "\n".join([t["text"] for t in current_call_transcript[-15:]])
-        
-        system_message = """You are an AI sales co-pilot providing real-time assistance during a live sales conversation. 
-Your goal is to be helpful and proactive, offering useful insights and suggestions to help the sales rep succeed.
-
-Provide helpful suggestions when you notice:
-1. Customer objections, concerns, or hesitations that need addressing
-2. Questions from the customer that need clear answers
-3. Opportunities to advance the sale or move to next steps
-4. Important pain points or needs the customer expresses
-5. Moments where the sales rep could benefit from guidance
-6. Natural conversation transitions where a helpful response would be valuable
-7. Key information about the customer that should be remembered or acted upon
-
-Be proactive but not overwhelming. For normal flowing conversation, provide brief, helpful context or reminders.
-For important moments (objections, questions, opportunities), provide more detailed guidance.
-
-Your response MUST be in JSON format:
-{
-  "suggestion": "Brief, helpful context about what's happening in the conversation",
-  "key_points": ["Key insight 1", "Key insight 2"],
-  "recommended_response": "A helpful phrase or question the sales rep could say next (if relevant)",
-  "insight_type": "objection_handling|next_step|key_info|response_suggestion|close_opportunity"
-}
-
-Even for normal conversation, provide brief helpful context. Only leave fields empty if the transcript is truly unclear or just noise."""
-        
-        context_text = ""
-        if client_id in client_info and client_info[client_id]:
-            context_preview = client_info[client_id][:2000]
-            context_text = f"\n\nCLIENT CONTEXT:\n{context_preview}\n"
-        
-        user_message = f"""Here's the recent conversation transcript:
-
-{recent_transcript}
-{context_text}
-
-Analyze this conversation and provide helpful, actionable suggestions. What's happening? What should the sales rep be aware of or consider saying next? Be helpful and proactive."""
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_message}
-            ],
-            max_tokens=400,
-            temperature=0.8,
-            response_format={"type": "json_object"}
-        )
-        
-        try:
-            analysis_content = response.choices[0].message.content
-            analysis = json.loads(analysis_content)
-        except json.JSONDecodeError:
-            analysis = {
-                "suggestion": analysis_content[:200] if analysis_content else "Analysis completed",
-                "key_points": [],
-                "recommended_response": "",
-                "insight_type": "response_suggestion"
+        recognition.onstart = () => { if (isActive && !isAiTalking) console.log("Listening..."); };
+        recognition.onend = () => { 
+            if (isActive && !isAiTalking) setTimeout(() => { try { recognition.start(); } catch(e){} }, 200); 
+        };
+        recognition.onresult = (event) => {
+            const lastResult = event.results[event.results.length - 1];
+            if (lastResult.isFinal) {
+                const text = lastResult[0].transcript;
+                if (text.trim()) handleUserInput(text);
             }
-        
-        return JSONResponse({
-            "status": "success",
-            "analysis": analysis,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        return JSONResponse({
-            "status": "error",
-            "message": f"Analysis failed: {str(e)}"
-        })
+        };
+    } else { alert('Speech recognition not supported. Use Chrome.'); }
 
-@app.post("/clear_context")
-async def clear_context():
-    """Clear conversation history"""
-    global conversation_history, current_call_transcript
-    conversation_history = []
-    current_call_transcript = []
-    return JSONResponse({"status": "success", "message": "Context cleared"})
-
-@app.post("/start_call")
-async def start_call(client_id: str = Form("default_client")):
-    """Initialize a new call session"""
-    global current_call_transcript, active_sessions
-    call_id = f"call_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    current_call_transcript = []
-    active_sessions[call_id] = {
-        "client_id": client_id,
-        "start_time": datetime.now().isoformat(),
-        "transcript": []
+    function speak(text) {
+        isAiTalking = true;
+        recognition.stop();
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.1;
+        utterance.onend = () => {
+            isAiTalking = false;
+            if (isActive) setTimeout(() => { try { recognition.start(); } catch(e){} }, 300);
+        };
+        window.speechSynthesis.speak(utterance);
     }
-    return JSONResponse({
-        "status": "success",
-        "call_id": call_id,
-        "message": "Call session started"
-    })
 
-@app.post("/end_call")
-async def end_call(call_id: str = Form(...)):
-    """End call and get summary"""
-    global active_sessions, current_call_transcript
+    async function handleUserInput(text) {
+        isAiTalking = true;
+        recognition.stop();
+        addMessage(text, 'user-msg');
+
+        const formData = new FormData();
+        formData.append('message', text);
+        formData.append('history', JSON.stringify(conversation));
+        
+        if (fileInput.files.length > 0) {
+            formData.append('file', fileInput.files[0]);
+            addMessage(`[Uploaded: ${fileInput.files[0].name}]`, 'user-msg');
+        }
+
+        try {
+            const response = await fetch(BACKEND_URL, { method: 'POST', body: formData });
+            const data = await response.json();
+            
+            if (data.error) throw new Error(data.error);
+
+            conversation.push({ role: "user", content: text });
+            conversation.push({ role: "assistant", content: data.reply });
+            
+            addMessage(data.reply, 'ai-msg');
+            speak(data.reply);
+
+            fileInput.value = '';
+            fileBtnLabel.classList.remove('has-file');
+            filePreview.style.display = 'none';
+
+        } catch (err) {
+            console.error(err);
+            addMessage("Error processing request.", 'ai-msg');
+            speak("Sorry, I had trouble with that.");
+            isAiTalking = false;
+        }
+    }
+
+    function addMessage(text, className) {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `msg ${className}`;
+        msgDiv.innerHTML = `<div class="msg-content">${text}</div>`;
+        chatHistory.appendChild(msgDiv);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+
+    startBtn.onclick = () => {
+        isActive = true;
+        startBtn.style.display = 'none';
+        stopBtn.style.display = 'block';
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+        try { recognition.start(); } catch (e) {}
+    };
+
+    stopBtn.onclick = () => {
+        isActive = false;
+        isAiTalking = false;
+        startBtn.style.display = 'block';
+        stopBtn.style.display = 'none';
+        window.speechSynthesis.cancel();
+        try { recognition.stop(); } catch (e) {}
+    };
+
+    document.getElementById('clearBtn').onclick = () => {
+        chatHistory.innerHTML = '';
+        conversation = [];
+    };
+</script>
+</body>
+</html>
+"""
+
+@app.route('/', methods=['GET'])
+def home():
+    return render_template_string(HTML_TEMPLATE)
+
+def extract_text_from_file(file_storage):
+    filename = file_storage.filename.lower()
     
+    # 1. Handle PDF
+    if filename.endswith('.pdf'):
+        try:
+            pdf_reader = PdfReader(file_storage)
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            return text, False
+        except Exception as e:
+            raise Exception(f"Failed to read PDF: {str(e)}")
+
+    # 2. Handle Image
+    mime_type, _ = mimetypes.guess_type(filename)
+    if mime_type and mime_type.startswith('image'):
+        file_storage.seek(0)
+        image_data = base64.b64encode(file_storage.read()).decode('utf-8')
+        return f"data:{mime_type};base64,{image_data}", True
+
+    # 3. Handle Text/Code
     try:
-        full_transcript = "\n".join([t["text"] for t in current_call_transcript])
-        
-        summary_prompt = f"""Analyze this sales call and provide:
-1. Key discussion points
-2. Customer pain points identified
-3. Next steps agreed upon
-4. Concerns or objections raised
-5. Overall call sentiment
+        file_storage.seek(0)
+        return file_storage.read().decode('utf-8'), False
+    except UnicodeDecodeError:
+        raise Exception("File type not supported. Please upload Text, PDF, or Images.")
 
-TRANSCRIPT:
-{full_transcript[:4000]}
-
-Provide a concise summary in bullet format."""
+@app.route('/chat', methods=['POST'])
+def chat():
+    try:
+        user_message = request.form.get('message', '')
+        history_json = request.form.get('history', '[]')
         
-        summary_response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a sales analytics AI. Provide clear, actionable call summaries."},
-                {"role": "user", "content": summary_prompt}
-            ],
-            max_tokens=400,
-            temperature=0.7
+        import json
+        client_history = json.loads(history_json)
+        
+        uploaded_file = request.files.get('file')
+        new_user_content = []
+        new_user_content.append({"type": "text", "text": user_message})
+
+        if uploaded_file:
+            print(f"Processing file: {uploaded_file.filename}")
+            try:
+                content, is_image = extract_text_from_file(uploaded_file)
+                
+                if is_image:
+                    new_user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": content}
+                    })
+                else:
+                    file_context = f"\n\n--- FILE CONTENT ({uploaded_file.filename}) ---\n{content}\n--- END FILE ---\n"
+                    new_user_content[0]['text'] += file_context
+                    
+            except Exception as e:
+                return jsonify({'error': str(e)}), 400
+
+        # --- CONSTRUCT MESSAGES WITH SYSTEM PROMPT ---
+        final_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        final_messages.extend(client_history) # Add history
+        final_messages.append({"role": "user", "content": new_user_content}) # Add new message
+
+        client = openai.OpenAI(api_key=HARDCODED_KEY)
+        
+        print("Sending to OpenAI...")
+        response = client.chat.completions.create(
+            model='gpt-4o-mini',
+            messages=final_messages,
+            max_tokens=150  # <--- LIMITS RESPONSE LENGTH TO BE FAST
         )
         
-        summary = summary_response.choices[0].message.content
-        
-        if call_id in active_sessions:
-            active_sessions[call_id]["end_time"] = datetime.now().isoformat()
-            active_sessions[call_id]["summary"] = summary
-        
-        return JSONResponse({
-            "status": "success",
-            "summary": summary,
-            "transcript_length": len(current_call_transcript)
-        })
-        
+        reply = response.choices[0].message.content
+        return jsonify({'success': True, 'reply': reply})
+
     except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
+        print(f"Server Error: {e}")
+        return jsonify({'error': str(e)}), 500
 
-@app.get("/get_history")
-async def get_history():
-    """Get conversation history"""
-    return JSONResponse({
-        "status": "success",
-        "history": conversation_history,
-        "has_context": bool(client_info)
-    })
-
-if __name__ == "__main__":
-    print("\n" + "="*70)
-    print("🚀 Real-Time AI Sales Assistant Starting...")
-    print("="*70)
-    print("\n✨ Features:")
-    print("   - Real-time continuous conversation")
-    print("   - AI-powered sales recommendations")
-    print("   - Client information context")
-    print("   - Live suggestions during calls")
-    print("\n🌐 Open in browser: http://127.0.0.1:8000")
-    print("="*70 + "\n")
-    
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+if __name__ == '__main__':
+    print("=" * 50)
+    print("📍 Running at: http://127.0.0.1:5000")
+    print("=" * 50)
+    app.run(debug=True, port=5000)
