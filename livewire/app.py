@@ -10,231 +10,363 @@ app = Flask(__name__)
 CORS(app)
 
 # --- HARDCODED API KEY ---
-HARDCODED_KEY = 
+HARDCODED_KEY = "sk...." 
+
+# --- PERSISTENT MEMORY STORAGE ---
+KNOWLEDGE_BASE = ""
+
 # --- SYSTEM PERSONA ---
-# This controls how the AI acts and forces it to be short
-SYSTEM_PROMPT = """
-You are a 'Little Helper'. You are enthusiastic, kind, and helpful.
-CRITICAL INSTRUCTION: Keep your responses VERY SHORT (under 2 sentences). 
-Do not lecture. Just give the answer or a quick suggestion. 
-If you need to summarize a file, do it in bullet points but keep it brief.
+BASE_SYSTEM_PROMPT = """
+You are 'Little Helper', an enthusiastic, charismatic AI Sales Assistant.
+You can see the user's screen if they share it.
+
+YOUR GOAL:
+1. If the user sends an image or screen capture, ANALYZE it for sales opportunities or explain what is on screen.
+2. Answer questions based on the "KNOWLEDGE BASE" or the Visual Input provided.
+3. Be persuasive, brief, and exciting.
+
+FORMATTING RULES:
+- Keep responses SHORT (under 2-3 sentences).
+- Use emojis and bold text.
+- Format options: "🎯 BEST CHOICE:", "🔥 HOT TAKE:", "💎 PREMIUM TIP:"
 """
 
-# --- HTML TEMPLATE ---
+# --- HTML TEMPLATE (WITH SCREEN SHARE) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Little Helper Assistant</title>
+    <title>Sales Bot Widget</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        :root {
+            --primary: #6366f1;
+            --accent: #ec4899;
+            --text: #f8fafc;
+            --gradient: linear-gradient(135deg, #6366f1, #ec4899);
+        }
+        
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        
         body {
             font-family: 'Inter', sans-serif;
-            background: #0a0a0a; color: #fff;
-            min-height: 100vh; display: flex; align-items: center; justify-content: center;
-            padding: 20px; overflow: hidden; position: relative;
+            background: transparent;
+            min-height: 100vh;
+            overflow: hidden;
         }
-        body::before {
-            content: ''; position: fixed; top: -50%; left: -50%; width: 200%; height: 200%;
-            background: radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3), transparent 50%),
-                        radial-gradient(circle at 80% 80%, rgba(74, 86, 226, 0.3), transparent 50%);
-            z-index: 0;
+
+        /* --- LAUNCHER --- */
+        .launcher {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            background: var(--gradient);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 10px 25px rgba(99, 102, 241, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            transition: all 0.3s;
+            animation: pulse 3s infinite;
         }
-        .container {
-            position: relative; z-index: 1; width: 100%; max-width: 900px;
-            background: rgba(20, 20, 25, 0.7); backdrop-filter: blur(40px);
-            border-radius: 32px; padding: 48px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
-            border: 1px solid rgba(255, 255, 255, 0.05);
+        .launcher:hover { transform: scale(1.1) rotate(5deg); }
+        .launcher span { font-size: 30px; }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(236, 72, 153, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0); }
         }
-        .header { text-align: center; margin-bottom: 30px; }
-        h1 {
-            font-size: 2.5rem; font-weight: 700;
-            background: linear-gradient(135deg, #fff 0%, #a78bfa 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+
+        /* --- WIDGET CONTAINER --- */
+        .widget-container {
+            position: fixed;
+            bottom: 100px;
+            right: 30px;
+            width: 380px;
+            height: 600px;
+            background: rgba(30, 41, 59, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 999;
+            opacity: 0;
+            transform: translateY(20px) scale(0.95);
+            transition: all 0.4s;
+            pointer-events: none;
         }
+        .widget-container.active { opacity: 1; transform: translateY(0) scale(1); pointer-events: all; }
+
+        .header {
+            padding: 20px;
+            background: linear-gradient(to right, rgba(99, 102, 241, 0.1), transparent);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .avatar { width: 40px; height: 40px; border-radius: 12px; background: var(--gradient); display: flex; justify-content: center; align-items: center; font-size: 20px; }
+        .title h2 { font-size: 1rem; color: var(--text); font-weight: 700; }
+        .title p { font-size: 0.75rem; color: #94a3b8; }
+        .close-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 1.2rem; }
+
+        /* --- CHAT AREA --- */
         #chat-history {
-            height: 400px; overflow-y: auto; padding: 24px; margin-bottom: 20px;
-            background: rgba(0, 0, 0, 0.2); border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.05);
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
         }
-        .msg { margin-bottom: 16px; display: flex; animation: fade 0.4s; }
-        @keyframes fade { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .msg-content { max-width: 75%; padding: 14px 18px; border-radius: 18px; font-size: 0.95rem; line-height: 1.5; }
-        .user-msg { justify-content: flex-end; }
-        .user-msg .msg-content { background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); color: #fff; }
-        .ai-msg { justify-content: flex-start; }
-        .ai-msg .msg-content { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .msg { display: flex; max-width: 85%; }
+        .msg.user { align-self: flex-end; }
+        .msg.ai { align-self: flex-start; }
         
-        .controls { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
-        button { padding: 16px 30px; border: none; border-radius: 16px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
-        #startBtn { background: #7c3aed; color: white; flex: 1; min-width: 150px; }
-        #stopBtn { background: #ef4444; color: white; display: none; flex: 1; min-width: 150px; }
-        #clearBtn { background: rgba(255,255,255,0.1); color: white; }
+        .bubble {
+            padding: 12px 16px;
+            border-radius: 16px;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        .user .bubble { background: var(--primary); color: white; border-bottom-right-radius: 4px; }
+        .ai .bubble { background: rgba(255, 255, 255, 0.05); color: var(--text); border-bottom-left-radius: 4px; }
         
-        .file-wrapper { position: relative; }
-        input[type="file"] { display: none; }
-        .file-btn {
-            background: rgba(255,255,255,0.1); color: white; padding: 16px; border-radius: 16px;
-            cursor: pointer; display: flex; align-items: center; justify-content: center;
-            border: 1px solid rgba(255,255,255,0.1);
+        .msg img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin-bottom: 5px;
+            border: 1px solid rgba(255,255,255,0.2);
         }
-        .file-btn:hover { background: rgba(255,255,255,0.2); }
-        .file-btn.has-file { background: #22c55e; border-color: #22c55e; }
-        .file-preview {
-            position: absolute; bottom: 110%; left: 0; background: #22c55e; color: black;
-            padding: 4px 8px; border-radius: 8px; font-size: 0.75rem; white-space: nowrap; display: none;
+
+        /* --- CONTROLS --- */
+        .controls {
+            padding: 15px;
+            background: rgba(15, 23, 42, 0.6);
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            gap: 10px;
+            align-items: center;
         }
+
+        .icon-btn {
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 1.2rem;
+            padding: 8px;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+        .icon-btn:hover { background: rgba(255,255,255,0.1); color: var(--accent); }
+        .icon-btn.active-screen { color: #10b981; animation: pulseGreen 2s infinite; }
+
+        @keyframes pulseGreen {
+            0% { text-shadow: 0 0 0 rgba(16, 185, 129, 0); }
+            50% { text-shadow: 0 0 10px rgba(16, 185, 129, 0.5); }
+            100% { text-shadow: 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        #micBtn {
+            background: var(--gradient);
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            margin-left: auto;
+        }
+        #micBtn:hover { transform: scale(1.05); }
+
+        /* Hidden video element for capturing screen */
+        #screenVideo { display: none; }
+        
     </style>
 </head>
 <body>
-    <div class="container">
+
+    <div class="launcher" id="launcherBtn"><span>⚡</span></div>
+
+    <div class="widget-container" id="widget">
         <div class="header">
-            <h1>Little Helper</h1>
-            <div class="subtitle">Fast, Short, & Helpful</div>
+            <div class="brand">
+                <div class="avatar">🤖</div>
+                <div class="title"><h2>Little Helper</h2><p>Visual Sales Assistant</p></div>
+            </div>
+            <button class="close-btn" id="closeBtn">✕</button>
         </div>
 
-        <div id="chat-history"></div>
+        <div id="chat-history">
+            <div class="msg ai"><div class="bubble">👋 I can see! Click the 📺 icon to share your screen.</div></div>
+        </div>
 
         <div class="controls">
-            <div class="file-wrapper">
-                <div id="filePreview" class="file-preview"></div>
-                <label for="fileInput" class="file-btn" id="fileBtnLabel">📎</label>
-                <input type="file" id="fileInput">
-            </div>
-            <button id="startBtn">Start Listening</button>
-            <button id="stopBtn">Stop</button>
-            <button id="clearBtn">Clear</button>
+            <label class="icon-btn" title="Upload File">
+                📎 <input type="file" id="fileInput" style="display:none">
+            </label>
+
+            <button class="icon-btn" id="screenBtn" title="Share Screen">📺</button>
+
+            <button id="micBtn">🎤</button>
         </div>
     </div>
 
+    <video id="screenVideo" autoplay></video>
+    <canvas id="screenCanvas" style="display:none;"></canvas>
+
 <script>
-    const BACKEND_URL = '/chat';
+    // --- UI ELEMENTS ---
+    const widget = document.getElementById('widget');
+    const launcherBtn = document.getElementById('launcherBtn');
+    const closeBtn = document.getElementById('closeBtn');
+    const micBtn = document.getElementById('micBtn');
+    const screenBtn = document.getElementById('screenBtn');
     const chatHistory = document.getElementById('chat-history');
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
     const fileInput = document.getElementById('fileInput');
-    const fileBtnLabel = document.getElementById('fileBtnLabel');
-    const filePreview = document.getElementById('filePreview');
-    
-    let recognition;
-    let isActive = false;
-    let isAiTalking = false;
-    let conversation = [];
+    const screenVideo = document.getElementById('screenVideo');
+    const screenCanvas = document.getElementById('screenCanvas');
 
-    fileInput.addEventListener('change', () => {
-        if (fileInput.files.length > 0) {
-            fileBtnLabel.classList.add('has-file');
-            filePreview.textContent = fileInput.files[0].name;
-            filePreview.style.display = 'block';
-        } else {
-            fileBtnLabel.classList.remove('has-file');
-            filePreview.style.display = 'none';
-        }
-    });
+    let screenStream = null;
+    let isScreenSharing = false;
 
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = false;
-        recognition.lang = 'en-US';
+    // Toggle Widget
+    launcherBtn.onclick = () => widget.classList.add('active');
+    closeBtn.onclick = () => widget.classList.remove('active');
 
-        recognition.onstart = () => { if (isActive && !isAiTalking) console.log("Listening..."); };
-        recognition.onend = () => { 
-            if (isActive && !isAiTalking) setTimeout(() => { try { recognition.start(); } catch(e){} }, 200); 
-        };
-        recognition.onresult = (event) => {
-            const lastResult = event.results[event.results.length - 1];
-            if (lastResult.isFinal) {
-                const text = lastResult[0].transcript;
-                if (text.trim()) handleUserInput(text);
+    // --- SCREEN SHARING LOGIC ---
+    screenBtn.onclick = async () => {
+        if (!isScreenSharing) {
+            try {
+                // Ask user for permission
+                screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                screenVideo.srcObject = screenStream;
+                isScreenSharing = true;
+                screenBtn.classList.add('active-screen');
+                addBubble("📺 Screen sharing active! I'm watching...", 'ai');
+                
+                // Handle user stopping share via browser UI
+                screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
+            } catch (err) {
+                console.error("Error sharing screen:", err);
             }
-        };
-    } else { alert('Speech recognition not supported. Use Chrome.'); }
+        } else {
+            stopScreenShare();
+        }
+    };
 
-    function speak(text) {
-        isAiTalking = true;
-        recognition.stop();
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 1.1;
-        utterance.onend = () => {
-            isAiTalking = false;
-            if (isActive) setTimeout(() => { try { recognition.start(); } catch(e){} }, 300);
-        };
-        window.speechSynthesis.speak(utterance);
+    function stopScreenShare() {
+        if (screenStream) {
+            screenStream.getTracks().forEach(track => track.stop());
+            screenVideo.srcObject = null;
+        }
+        isScreenSharing = false;
+        screenBtn.classList.remove('active-screen');
+        addBubble("🛑 Screen sharing stopped.", 'ai');
     }
 
-    async function handleUserInput(text) {
-        isAiTalking = true;
-        recognition.stop();
-        addMessage(text, 'user-msg');
+    function captureScreenFrame() {
+        if (!isScreenSharing) return null;
+        
+        const context = screenCanvas.getContext('2d');
+        screenCanvas.width = screenVideo.videoWidth;
+        screenCanvas.height = screenVideo.videoHeight;
+        context.drawImage(screenVideo, 0, 0, screenCanvas.width, screenCanvas.height);
+        return screenCanvas.toDataURL('image/jpeg', 0.7); // Return base64 image
+    }
+
+    // --- CHAT LOGIC ---
+    let recognition;
+    let conversation = [];
+
+    if ('webkitSpeechRecognition' in window) {
+        recognition = new webkitSpeechRecognition();
+        recognition.continuous = false;
+        
+        micBtn.onclick = () => { micBtn.style.background = '#ef4444'; recognition.start(); };
+        recognition.onend = () => { micBtn.style.background = ''; };
+        
+        recognition.onresult = (event) => {
+            const text = event.results[0][0].transcript;
+            handleInteraction(text);
+        };
+    }
+
+    async function handleInteraction(text) {
+        // 1. Show User Message
+        addBubble(text, 'user');
 
         const formData = new FormData();
         formData.append('message', text);
         formData.append('history', JSON.stringify(conversation));
         
+        // 2. CHECK FOR FILE
         if (fileInput.files.length > 0) {
             formData.append('file', fileInput.files[0]);
-            addMessage(`[Uploaded: ${fileInput.files[0].name}]`, 'user-msg');
+            addBubble(`📎 Sending file...`, 'user');
         }
 
+        // 3. CHECK FOR SCREEN SHARE
+        if (isScreenSharing) {
+            const screenShot = captureScreenFrame();
+            if (screenShot) {
+                formData.append('screen_image', screenShot); // Send the captured frame
+                // Optional: Show a tiny thumbnail in chat
+                // addImageBubble(screenShot, 'user'); 
+            }
+        }
+
+        // 4. Send to Backend
         try {
-            const response = await fetch(BACKEND_URL, { method: 'POST', body: formData });
-            const data = await response.json();
-            
-            if (data.error) throw new Error(data.error);
+            const res = await fetch('/chat', { method: 'POST', body: formData });
+            const data = await res.json();
 
-            conversation.push({ role: "user", content: text });
-            conversation.push({ role: "assistant", content: data.reply });
-            
-            addMessage(data.reply, 'ai-msg');
-            speak(data.reply);
-
-            fileInput.value = '';
-            fileBtnLabel.classList.remove('has-file');
-            filePreview.style.display = 'none';
-
-        } catch (err) {
-            console.error(err);
-            addMessage("Error processing request.", 'ai-msg');
-            speak("Sorry, I had trouble with that.");
-            isAiTalking = false;
+            if (data.success) {
+                addBubble(data.reply, 'ai');
+                conversation.push({ role: "user", content: text });
+                conversation.push({ role: "assistant", content: data.reply });
+                
+                const speech = new SpeechSynthesisUtterance(data.reply);
+                window.speechSynthesis.speak(speech);
+                
+                fileInput.value = ''; // Clear file
+            }
+        } catch (e) {
+            addBubble("❌ Connection error.", 'ai');
         }
     }
 
-    function addMessage(text, className) {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `msg ${className}`;
-        msgDiv.innerHTML = `<div class="msg-content">${text}</div>`;
-        chatHistory.appendChild(msgDiv);
+    function addBubble(text, sender) {
+        const div = document.createElement('div');
+        div.className = `msg ${sender}`;
+        div.innerHTML = `<div class="bubble">${text}</div>`;
+        chatHistory.appendChild(div);
         chatHistory.scrollTop = chatHistory.scrollHeight;
     }
-
-    startBtn.onclick = () => {
-        isActive = true;
-        startBtn.style.display = 'none';
-        stopBtn.style.display = 'block';
-        window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
-        try { recognition.start(); } catch (e) {}
-    };
-
-    stopBtn.onclick = () => {
-        isActive = false;
-        isAiTalking = false;
-        startBtn.style.display = 'block';
-        stopBtn.style.display = 'none';
-        window.speechSynthesis.cancel();
-        try { recognition.stop(); } catch (e) {}
-    };
-
-    document.getElementById('clearBtn').onclick = () => {
-        chatHistory.innerHTML = '';
-        conversation = [];
-    };
+    
+    function addImageBubble(b64, sender) {
+        const div = document.createElement('div');
+        div.className = `msg ${sender}`;
+        div.innerHTML = `<div class="bubble"><img src="${b64}" width="150"></div>`;
+        chatHistory.appendChild(div);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
 </script>
 </body>
 </html>
@@ -246,8 +378,6 @@ def home():
 
 def extract_text_from_file(file_storage):
     filename = file_storage.filename.lower()
-    
-    # 1. Handle PDF
     if filename.endswith('.pdf'):
         try:
             pdf_reader = PdfReader(file_storage)
@@ -255,76 +385,66 @@ def extract_text_from_file(file_storage):
             for page in pdf_reader.pages:
                 text += page.extract_text() + "\n"
             return text, False
-        except Exception as e:
-            raise Exception(f"Failed to read PDF: {str(e)}")
-
-    # 2. Handle Image
-    mime_type, _ = mimetypes.guess_type(filename)
-    if mime_type and mime_type.startswith('image'):
-        file_storage.seek(0)
-        image_data = base64.b64encode(file_storage.read()).decode('utf-8')
-        return f"data:{mime_type};base64,{image_data}", True
-
-    # 3. Handle Text/Code
+        except: return "", False
     try:
         file_storage.seek(0)
         return file_storage.read().decode('utf-8'), False
-    except UnicodeDecodeError:
-        raise Exception("File type not supported. Please upload Text, PDF, or Images.")
+    except: return "", False
 
 @app.route('/chat', methods=['POST'])
 def chat():
+    global KNOWLEDGE_BASE
+    
     try:
         user_message = request.form.get('message', '')
         history_json = request.form.get('history', '[]')
+        
+        # Screen Capture Data (Base64 string from canvas)
+        screen_image_data = request.form.get('screen_image')
         
         import json
         client_history = json.loads(history_json)
         
         uploaded_file = request.files.get('file')
-        new_user_content = []
-        new_user_content.append({"type": "text", "text": user_message})
-
         if uploaded_file:
-            print(f"Processing file: {uploaded_file.filename}")
-            try:
-                content, is_image = extract_text_from_file(uploaded_file)
-                
-                if is_image:
-                    new_user_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": content}
-                    })
-                else:
-                    file_context = f"\n\n--- FILE CONTENT ({uploaded_file.filename}) ---\n{content}\n--- END FILE ---\n"
-                    new_user_content[0]['text'] += file_context
-                    
-            except Exception as e:
-                return jsonify({'error': str(e)}), 400
+            content, _ = extract_text_from_file(uploaded_file)
+            if content: KNOWLEDGE_BASE += f"\n[FILE DATA]: {content}\n"
 
-        # --- CONSTRUCT MESSAGES WITH SYSTEM PROMPT ---
-        final_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        final_messages.extend(client_history) # Add history
-        final_messages.append({"role": "user", "content": new_user_content}) # Add new message
+        # --- BUILD MESSAGE PAYLOAD ---
+        # Current system prompt + knowledge
+        sys_prompt = BASE_SYSTEM_PROMPT
+        if KNOWLEDGE_BASE: sys_prompt += f"\n\n📕 MEMORY:\n{KNOWLEDGE_BASE}"
+        
+        messages = [{"role": "system", "content": sys_prompt}]
+        messages.extend(client_history)
+
+        # Create the user message content block
+        user_content = [{"type": "text", "text": user_message}]
+
+        # If we have a screen image, attach it!
+        if screen_image_data:
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": screen_image_data}
+            })
+            print("📺 Analyzing Screen Capture...")
+
+        messages.append({"role": "user", "content": user_content})
 
         client = openai.OpenAI(api_key=HARDCODED_KEY)
-        
-        print("Sending to OpenAI...")
         response = client.chat.completions.create(
-            model='gpt-4o-mini',
-            messages=final_messages,
-            max_tokens=150  # <--- LIMITS RESPONSE LENGTH TO BE FAST
+            model='gpt-4o-mini', # Or gpt-4o for better vision
+            messages=messages,
+            max_tokens=200
         )
         
         reply = response.choices[0].message.content
         return jsonify({'success': True, 'reply': reply})
 
     except Exception as e:
-        print(f"Server Error: {e}")
+        print(f"Error: {e}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    print("=" * 50)
-    print("📍 Running at: http://127.0.0.1:5000")
-    print("=" * 50)
+    print("⚡ WIDGET STARTED")
     app.run(debug=True, port=5000)
