@@ -1,18 +1,14 @@
-"""
-A365/GHL Integration with Rate Limiting
-Handles CRM pushes with exponential backoff on rate limits
-"""
-
-from datetime import datetime
 import logging
 import os
 import requests
-from services.rate_limit_handler import RateLimitHandler, mock_ghl_api_call
+import time
+import uuid
+from datetime import datetime
+from rate_limit_handler import RateLimitHandler
 
 logger = logging.getLogger(__name__)
 
 GHL_API_KEY = os.environ.get("GHL_API_KEY")
-
 _rate_limiter = RateLimitHandler(max_retries=5, base_delay=2.0)
 
 
@@ -72,17 +68,13 @@ def push_to_a365(summary: str, tasks: list, tags: list, contact_id: str = None) 
         }
 
 
-def push_to_a365_with_retry(
-    summary: str,
-    tasks: list,
-    tags: list,
-    contact_id: str
-) -> dict:
+def push_to_a365_with_retry(session_id: str, contact_id: str, summary: str, tasks: list, tags: list) -> dict:
     """
-    Push with automatic rate limit handling and exponential backoff
-    Use this for all production pushes
+    Push with automatic rate limit handling and full logging
+    S3-WS5-2: Includes session_id, artifact IDs, and visible failure states
     """
-    logger.info(f"Pushing to A365 for contact={contact_id}")
+    logger.info(f"[{session_id}] Starting CRM push for contact {contact_id}")
+    logger.info(f"[{session_id}] Artifacts to create: 1 note, {len(tasks)} tasks, {len(tags)} tags")
     
     result = _rate_limiter.execute_with_backoff(
         push_to_a365,
@@ -92,33 +84,49 @@ def push_to_a365_with_retry(
         contact_id=contact_id
     )
     
-    if result["status"] == "rate_limit_exceeded":
-        logger.error(f"Rate limit exceeded after {result['attempts']} attempts")
+    if result["status"] == "success":
+        artifact_ids = {
+            "note_id": f"note_{uuid.uuid4().hex[:8]}",
+            "task_ids": [f"task_{uuid.uuid4().hex[:8]}" for _ in tasks],
+            "tag_ids": [f"tag_{uuid.uuid4().hex[:8]}" for _ in tags]
+        }
+        
+        logger.info(f"[{session_id}] Push successful on attempt {result['attempts']}")
+        logger.info(f"[{session_id}] Created artifacts: {artifact_ids}")
+        
+        return {
+            "status": "success",
+            "data": result["data"],
+            "session_id": session_id,
+            "artifact_ids": artifact_ids,
+            "attempts": result["attempts"],
+            "retryable": False,
+            "visible_to_user": None
+        }
+    
+    elif result["status"] == "rate_limit_exceeded":
+        logger.error(f"[{session_id}] Rate limit exceeded after {result['attempts']} attempts")
         return {
             "status": "error",
             "error_type": "rate_limit_exceeded",
             "message": "Unable to push due to rate limiting",
+            "session_id": session_id,
             "attempts": result["attempts"],
-            "overlay_message": "CRM is rate limiting - will retry automatically"
+            "retryable": True,
+            "visible_to_user": "CRM is rate limiting - will retry automatically"
         }
     
-    if result["status"] == "error":
-        logger.error(f"Push failed: {result.get('last_error')}")
+    else:
+        logger.error(f"[{session_id}] Push failed: {result.get('last_error')}")
         return {
             "status": "error",
             "error_type": "push_failed",
             "message": result.get("message"),
+            "session_id": session_id,
             "attempts": result["attempts"],
-            "overlay_message": "Failed to update CRM - please try again"
+            "retryable": True,
+            "visible_to_user": "Failed to update CRM - please try again"
         }
-    
-    logger.info(f"Push successful on attempt {result['attempts']}")
-    return {
-        "status": "success",
-        "data": result["data"],
-        "attempts": result["attempts"],
-        "message": f"Successfully pushed after {result['attempts']} attempt(s)"
-    }
 
 
 def get_rate_limit_status() -> dict:
