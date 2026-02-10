@@ -1,450 +1,349 @@
-from flask import Flask, request, jsonify, render_template_string
-from flask_cors import CORS
-import openai
-import base64
-import mimetypes
-import io
-from PyPDF2 import PdfReader
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from openai import OpenAI
+from pypdf import PdfReader
+import uvicorn
+import tempfile
+import os
+import json
+import asyncio
+from datetime import datetime
+from typing import Dict, List, Optional
+from collections import deque
+from services.a365_integration import push_to_a365
+from services.guardrails import GuardrailEngine
 
-app = Flask(__name__)
-CORS(app)
+app = FastAPI()
+guardrails = GuardrailEngine()
 
-# --- HARDCODED API KEY ---
-HARDCODED_KEY = "sk...." 
-
-# --- PERSISTENT MEMORY STORAGE ---
-KNOWLEDGE_BASE = ""
-
-# --- SYSTEM PERSONA ---
-BASE_SYSTEM_PROMPT = """
-You are 'Little Helper', an enthusiastic, charismatic AI Sales Assistant.
-You can see the user's screen if they share it.
-
-YOUR GOAL:
-1. If the user sends an image or screen capture, ANALYZE it for sales opportunities or explain what is on screen.
-2. Answer questions based on the "KNOWLEDGE BASE" or the Visual Input provided.
-3. Be persuasive, brief, and exciting.
-
-FORMATTING RULES:
-- Keep responses SHORT (under 2-3 sentences).
-- Use emojis and bold text.
-- Format options: "🎯 BEST CHOICE:", "🔥 HOT TAKE:", "💎 PREMIUM TIP:"
-"""
-
-# --- HTML TEMPLATE (WITH SCREEN SHARE) ---
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sales Bot Widget</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@app.post("/api/a365/push")
+async def a365_push_endpoint(payload: dict):
+    try:
+        summary = payload.get("summary", "")
+        tasks = payload.get("tasks", [])
+        tags = payload.get("tags", [])
         
-        :root {
-            --primary: #6366f1;
-            --accent: #ec4899;
-            --text: #f8fafc;
-            --gradient: linear-gradient(135deg, #6366f1, #ec4899);
-        }
+        result = push_to_a365(summary, tasks, tags)
         
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', sans-serif;
-            background: transparent;
-            min-height: 100vh;
-            overflow: hidden;
+        return {
+            "status": "success",
+            "pushed": result,
+            "mock": True
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
         }
 
-        /* --- LAUNCHER --- */
-        .launcher {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            width: 60px;
-            height: 60px;
-            background: var(--gradient);
-            border-radius: 50%;
-            cursor: pointer;
-            box-shadow: 0 10px 25px rgba(99, 102, 241, 0.5);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            transition: all 0.3s;
-            animation: pulse 3s infinite;
-        }
-        .launcher:hover { transform: scale(1.1) rotate(5deg); }
-        .launcher span { font-size: 30px; }
-
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0.7); }
-            70% { box-shadow: 0 0 0 15px rgba(236, 72, 153, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0); }
-        }
-
-        /* --- WIDGET CONTAINER --- */
-        .widget-container {
-            position: fixed;
-            bottom: 100px;
-            right: 30px;
-            width: 380px;
-            height: 600px;
-            background: rgba(30, 41, 59, 0.95);
-            backdrop-filter: blur(20px);
-            border-radius: 24px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            z-index: 999;
-            opacity: 0;
-            transform: translateY(20px) scale(0.95);
-            transition: all 0.4s;
-            pointer-events: none;
-        }
-        .widget-container.active { opacity: 1; transform: translateY(0) scale(1); pointer-events: all; }
-
-        .header {
-            padding: 20px;
-            background: linear-gradient(to right, rgba(99, 102, 241, 0.1), transparent);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .brand { display: flex; align-items: center; gap: 12px; }
-        .avatar { width: 40px; height: 40px; border-radius: 12px; background: var(--gradient); display: flex; justify-content: center; align-items: center; font-size: 20px; }
-        .title h2 { font-size: 1rem; color: var(--text); font-weight: 700; }
-        .title p { font-size: 0.75rem; color: #94a3b8; }
-        .close-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 1.2rem; }
-
-        /* --- CHAT AREA --- */
-        #chat-history {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-        .msg { display: flex; max-width: 85%; }
-        .msg.user { align-self: flex-end; }
-        .msg.ai { align-self: flex-start; }
-        
-        .bubble {
-            padding: 12px 16px;
-            border-radius: 16px;
-            font-size: 0.9rem;
-            line-height: 1.5;
-        }
-        .user .bubble { background: var(--primary); color: white; border-bottom-right-radius: 4px; }
-        .ai .bubble { background: rgba(255, 255, 255, 0.05); color: var(--text); border-bottom-left-radius: 4px; }
-        
-        .msg img {
-            max-width: 100%;
-            border-radius: 8px;
-            margin-bottom: 5px;
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-
-        /* --- CONTROLS --- */
-        .controls {
-            padding: 15px;
-            background: rgba(15, 23, 42, 0.6);
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-
-        .icon-btn {
-            background: transparent;
-            border: none;
-            color: #94a3b8;
-            cursor: pointer;
-            font-size: 1.2rem;
-            padding: 8px;
-            border-radius: 8px;
-            transition: all 0.2s;
-        }
-        .icon-btn:hover { background: rgba(255,255,255,0.1); color: var(--accent); }
-        .icon-btn.active-screen { color: #10b981; animation: pulseGreen 2s infinite; }
-
-        @keyframes pulseGreen {
-            0% { text-shadow: 0 0 0 rgba(16, 185, 129, 0); }
-            50% { text-shadow: 0 0 10px rgba(16, 185, 129, 0.5); }
-            100% { text-shadow: 0 0 0 rgba(16, 185, 129, 0); }
-        }
-
-        #micBtn {
-            background: var(--gradient);
-            border: none;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            cursor: pointer;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            color: white;
-            margin-left: auto;
-        }
-        #micBtn:hover { transform: scale(1.05); }
-
-        /* Hidden video element for capturing screen */
-        #screenVideo { display: none; }
-        
-    </style>
-</head>
-<body>
-
-    <div class="launcher" id="launcherBtn"><span>⚡</span></div>
-
-    <div class="widget-container" id="widget">
-        <div class="header">
-            <div class="brand">
-                <div class="avatar">🤖</div>
-                <div class="title"><h2>Little Helper</h2><p>Visual Sales Assistant</p></div>
-            </div>
-            <button class="close-btn" id="closeBtn">✕</button>
-        </div>
-
-        <div id="chat-history">
-            <div class="msg ai"><div class="bubble">👋 I can see! Click the 📺 icon to share your screen.</div></div>
-        </div>
-
-        <div class="controls">
-            <label class="icon-btn" title="Upload File">
-                📎 <input type="file" id="fileInput" style="display:none">
-            </label>
-
-            <button class="icon-btn" id="screenBtn" title="Share Screen">📺</button>
-
-            <button id="micBtn">🎤</button>
-        </div>
-    </div>
-
-    <video id="screenVideo" autoplay></video>
-    <canvas id="screenCanvas" style="display:none;"></canvas>
-
-<script>
-    // --- UI ELEMENTS ---
-    const widget = document.getElementById('widget');
-    const launcherBtn = document.getElementById('launcherBtn');
-    const closeBtn = document.getElementById('closeBtn');
-    const micBtn = document.getElementById('micBtn');
-    const screenBtn = document.getElementById('screenBtn');
-    const chatHistory = document.getElementById('chat-history');
-    const fileInput = document.getElementById('fileInput');
-    const screenVideo = document.getElementById('screenVideo');
-    const screenCanvas = document.getElementById('screenCanvas');
-
-    let screenStream = null;
-    let isScreenSharing = false;
-
-    // Toggle Widget
-    launcherBtn.onclick = () => widget.classList.add('active');
-    closeBtn.onclick = () => widget.classList.remove('active');
-
-    // --- SCREEN SHARING LOGIC ---
-    screenBtn.onclick = async () => {
-        if (!isScreenSharing) {
-            try {
-                // Ask user for permission
-                screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-                screenVideo.srcObject = screenStream;
-                isScreenSharing = true;
-                screenBtn.classList.add('active-screen');
-                addBubble("📺 Screen sharing active! I'm watching...", 'ai');
-                
-                // Handle user stopping share via browser UI
-                screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
-            } catch (err) {
-                console.error("Error sharing screen:", err);
-            }
-        } else {
-            stopScreenShare();
-        }
-    };
-
-    function stopScreenShare() {
-        if (screenStream) {
-            screenStream.getTracks().forEach(track => track.stop());
-            screenVideo.srcObject = null;
-        }
-        isScreenSharing = false;
-        screenBtn.classList.remove('active-screen');
-        addBubble("🛑 Screen sharing stopped.", 'ai');
-    }
-
-    function captureScreenFrame() {
-        if (!isScreenSharing) return null;
-        
-        const context = screenCanvas.getContext('2d');
-        screenCanvas.width = screenVideo.videoWidth;
-        screenCanvas.height = screenVideo.videoHeight;
-        context.drawImage(screenVideo, 0, 0, screenCanvas.width, screenCanvas.height);
-        return screenCanvas.toDataURL('image/jpeg', 0.7); // Return base64 image
-    }
-
-    // --- CHAT LOGIC ---
-    let recognition;
-    let conversation = [];
-
-    if ('webkitSpeechRecognition' in window) {
-        recognition = new webkitSpeechRecognition();
-        recognition.continuous = false;
-        
-        micBtn.onclick = () => { micBtn.style.background = '#ef4444'; recognition.start(); };
-        recognition.onend = () => { micBtn.style.background = ''; };
-        
-        recognition.onresult = (event) => {
-            const text = event.results[0][0].transcript;
-            handleInteraction(text);
-        };
-    }
-
-    async function handleInteraction(text) {
-        // 1. Show User Message
-        addBubble(text, 'user');
-
-        const formData = new FormData();
-        formData.append('message', text);
-        formData.append('history', JSON.stringify(conversation));
-        
-        // 2. CHECK FOR FILE
-        if (fileInput.files.length > 0) {
-            formData.append('file', fileInput.files[0]);
-            addBubble(`📎 Sending file...`, 'user');
-        }
-
-        // 3. CHECK FOR SCREEN SHARE
-        if (isScreenSharing) {
-            const screenShot = captureScreenFrame();
-            if (screenShot) {
-                formData.append('screen_image', screenShot); // Send the captured frame
-                // Optional: Show a tiny thumbnail in chat
-                // addImageBubble(screenShot, 'user'); 
-            }
-        }
-
-        // 4. Send to Backend
-        try {
-            const res = await fetch('/chat', { method: 'POST', body: formData });
-            const data = await res.json();
-
-            if (data.success) {
-                addBubble(data.reply, 'ai');
-                conversation.push({ role: "user", content: text });
-                conversation.push({ role: "assistant", content: data.reply });
-                
-                const speech = new SpeechSynthesisUtterance(data.reply);
-                window.speechSynthesis.speak(speech);
-                
-                fileInput.value = ''; // Clear file
-            }
-        } catch (e) {
-            addBubble("❌ Connection error.", 'ai');
-        }
-    }
-
-    function addBubble(text, sender) {
-        const div = document.createElement('div');
-        div.className = `msg ${sender}`;
-        div.innerHTML = `<div class="bubble">${text}</div>`;
-        chatHistory.appendChild(div);
-        chatHistory.scrollTop = chatHistory.scrollHeight;
-    }
+@app.post("/api/objection-detected")
+async def handle_objection(objection_data: dict):
+    objection_type = objection_data.get("type")
     
-    function addImageBubble(b64, sender) {
-        const div = document.createElement('div');
-        div.className = `msg ${sender}`;
-        div.innerHTML = `<div class="bubble"><img src="${b64}" width="150"></div>`;
-        chatHistory.appendChild(div);
-        chatHistory.scrollTop = chatHistory.scrollHeight;
-    }
-</script>
-</body>
-</html>
-"""
+    if not guardrails.should_show_card(objection_type):
+        return {"status": "blocked", "reason": "guardrails"}
+    
+    return {"status": "show_card", "data": objection_data}
 
-@app.route('/', methods=['GET'])
-def home():
-    return render_template_string(HTML_TEMPLATE)
+@app.post("/api/guardrails/reset")
+async def reset_guardrails():
+    guardrails.reset()
+    return {"status": "reset"}
 
-def extract_text_from_file(file_storage):
-    filename = file_storage.filename.lower()
-    if filename.endswith('.pdf'):
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+active_sessions: Dict[str, Dict] = {}
+client_info: Dict[str, str] = {}
+conversation_history: List[Dict] = []
+current_call_transcript: List[Dict] = []
+
+@app.get("/")
+def serve_index():
+    try:
+        with open("index.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except FileNotFoundError:
+        return HTMLResponse("<h1>Error: index.html not found</h1>")
+
+@app.post("/upload_client_info")
+async def upload_client_info(file: UploadFile = File(None), client_name: str = Form(None), client_notes: str = Form(None)):
+    global client_info
+    
+    try:
+        client_id = client_name or "default_client"
+        client_context = ""
+        
+        if file and file.filename.lower().endswith('.pdf'):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                content = await file.read()
+                tmp.write(content)
+                tmp_path = tmp.name
+            
+            reader = PdfReader(tmp_path)
+            text_parts = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    text_parts.append(text)
+            
+            client_context = "\n\n".join(text_parts)
+            os.unlink(tmp_path)
+        
+        if client_notes:
+            client_context += f"\n\nAdditional Notes:\n{client_notes}"
+        
+        client_info[client_id] = client_context
+        
+        return JSONResponse({
+            "status": "success",
+            "message": f"Client information loaded for {client_id}",
+            "client_id": client_id
+        })
+        
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": f"Failed to process client info: {str(e)}"})
+
+@app.post("/transcribe_audio")
+async def transcribe_audio(file: UploadFile = File(...)):
+    tmp_path = None
+    try:
+        file_ext = ".webm"
+        if file.filename:
+            if file.filename.endswith('.wav'):
+                file_ext = ".wav"
+            elif file.filename.endswith('.mp3'):
+                file_ext = ".mp3"
+            elif file.filename.endswith('.m4a'):
+                file_ext = ".m4a"
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
+            content = await file.read()
+            if len(content) == 0:
+                return JSONResponse({"status": "error", "message": "Empty audio file"})
+            tmp.write(content)
+            tmp_path = tmp.name
+        
+        with open(tmp_path, "rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="en",
+                temperature=0.0
+            )
+        
         try:
-            pdf_reader = PdfReader(file_storage)
-            text = ""
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-            return text, False
-        except: return "", False
-    try:
-        file_storage.seek(0)
-        return file_storage.read().decode('utf-8'), False
-    except: return "", False
+            os.unlink(tmp_path)
+            tmp_path = None
+        except:
+            pass
+        
+        text = transcription.text.strip() if hasattr(transcription, 'text') and transcription.text else str(transcription).strip()
+        
+        if not text:
+            return JSONResponse({"status": "error", "message": "No transcription text received"})
+        
+        return JSONResponse({
+            "status": "success",
+            "text": text
+        })
+        
+    except Exception as e:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+        return JSONResponse({"status": "error", "message": f"Transcription failed: {str(e)}"})
 
-@app.route('/chat', methods=['POST'])
-def chat():
-    global KNOWLEDGE_BASE
+@app.post("/submit_transcript")
+async def submit_transcript(text: str = Form(...)):
+    global current_call_transcript, conversation_history
+    
+    timestamp = datetime.now().isoformat()
+    
+    current_call_transcript.append({
+        "text": text,
+        "timestamp": timestamp
+    })
+    
+    conversation_history.append({
+        "role": "user",
+        "content": text,
+        "timestamp": timestamp
+    })
+    
+    return JSONResponse({"status": "success"})
+
+@app.post("/analyze_conversation")
+async def analyze_conversation(client_id: str = Form("default_client")):
+    global client_info, current_call_transcript
     
     try:
-        user_message = request.form.get('message', '')
-        history_json = request.form.get('history', '[]')
-        
-        # Screen Capture Data (Base64 string from canvas)
-        screen_image_data = request.form.get('screen_image')
-        
-        import json
-        client_history = json.loads(history_json)
-        
-        uploaded_file = request.files.get('file')
-        if uploaded_file:
-            content, _ = extract_text_from_file(uploaded_file)
-            if content: KNOWLEDGE_BASE += f"\n[FILE DATA]: {content}\n"
-
-        # --- BUILD MESSAGE PAYLOAD ---
-        # Current system prompt + knowledge
-        sys_prompt = BASE_SYSTEM_PROMPT
-        if KNOWLEDGE_BASE: sys_prompt += f"\n\n📕 MEMORY:\n{KNOWLEDGE_BASE}"
-        
-        messages = [{"role": "system", "content": sys_prompt}]
-        messages.extend(client_history)
-
-        # Create the user message content block
-        user_content = [{"type": "text", "text": user_message}]
-
-        # If we have a screen image, attach it!
-        if screen_image_data:
-            user_content.append({
-                "type": "image_url",
-                "image_url": {"url": screen_image_data}
+        if not current_call_transcript:
+            return JSONResponse({
+                "status": "success",
+                "message": "No transcript to analyze yet"
             })
-            print("📺 Analyzing Screen Capture...")
-
-        messages.append({"role": "user", "content": user_content})
-
-        client = openai.OpenAI(api_key=HARDCODED_KEY)
+        
+        recent_transcript = "\n".join([t["text"] for t in current_call_transcript[-15:]])
+        
+        system_message = """You are an AI sales co-pilot providing real-time assistance during a live sales conversation. 
+Your goal is to be helpful and proactive, offering useful insights and suggestions to help the sales rep succeed.
+Provide helpful suggestions when you notice:
+1. Customer objections, concerns, or hesitations that need addressing
+2. Questions from the customer that need clear answers
+3. Opportunities to advance the sale or move to next steps
+4. Important pain points or needs the customer expresses
+5. Moments where the sales rep could benefit from guidance
+6. Natural conversation transitions where a helpful response would be valuable
+7. Key information about the customer that should be remembered or acted upon
+Be proactive but not overwhelming. For normal flowing conversation, provide brief, helpful context or reminders.
+For important moments (objections, questions, opportunities), provide more detailed guidance.
+Your response MUST be in JSON format:
+{
+  "suggestion": "Brief, helpful context about what's happening in the conversation",
+  "key_points": ["Key insight 1", "Key insight 2"],
+  "recommended_response": "A helpful phrase or question the sales rep could say next (if relevant)",
+  "insight_type": "objection_handling|next_step|key_info|response_suggestion|close_opportunity"
+}
+Even for normal conversation, provide brief helpful context. Only leave fields empty if the transcript is truly unclear or just noise."""
+        
+        context_text = ""
+        if client_id in client_info and client_info[client_id]:
+            context_preview = client_info[client_id][:2000]
+            context_text = f"\n\nCLIENT CONTEXT:\n{context_preview}\n"
+        
+        user_message = f"""Here's the recent conversation transcript:
+{recent_transcript}
+{context_text}
+Analyze this conversation and provide helpful, actionable suggestions. What's happening? What should the sales rep be aware of or consider saying next? Be helpful and proactive."""
+        
         response = client.chat.completions.create(
-            model='gpt-4o-mini', # Or gpt-4o for better vision
-            messages=messages,
-            max_tokens=200
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ],
+            max_tokens=400,
+            temperature=0.8,
+            response_format={"type": "json_object"}
         )
         
-        reply = response.choices[0].message.content
-        return jsonify({'success': True, 'reply': reply})
-
+        try:
+            analysis_content = response.choices[0].message.content
+            analysis = json.loads(analysis_content)
+        except json.JSONDecodeError:
+            analysis = {
+                "suggestion": analysis_content[:200] if analysis_content else "Analysis completed",
+                "key_points": [],
+                "recommended_response": "",
+                "insight_type": "response_suggestion"
+            }
+        
+        return JSONResponse({
+            "status": "success",
+            "analysis": analysis,
+            "timestamp": datetime.now().isoformat()
+        })
+        
     except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return JSONResponse({
+            "status": "error",
+            "message": f"Analysis failed: {str(e)}"
+        })
 
-if __name__ == '__main__':
-    print("⚡ WIDGET STARTED")
-    app.run(debug=True, port=5000)
+@app.post("/clear_context")
+async def clear_context():
+    global conversation_history, current_call_transcript
+    conversation_history = []
+    current_call_transcript = []
+    return JSONResponse({"status": "success", "message": "Context cleared"})
+
+@app.post("/start_call")
+async def start_call(client_id: str = Form("default_client")):
+    global current_call_transcript, active_sessions
+    call_id = f"call_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    current_call_transcript = []
+    active_sessions[call_id] = {
+        "client_id": client_id,
+        "start_time": datetime.now().isoformat(),
+        "transcript": []
+    }
+    return JSONResponse({
+        "status": "success",
+        "call_id": call_id,
+        "message": "Call session started"
+    })
+
+@app.post("/end_call")
+async def end_call(call_id: str = Form(...)):
+    global active_sessions, current_call_transcript
+    
+    try:
+        full_transcript = "\n".join([t["text"] for t in current_call_transcript])
+        
+        summary_prompt = f"""Analyze this sales call and provide:
+1. Key discussion points
+2. Customer pain points identified
+3. Next steps agreed upon
+4. Concerns or objections raised
+5. Overall call sentiment
+TRANSCRIPT:
+{full_transcript[:4000]}
+Provide a concise summary in bullet format."""
+        
+        summary_response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a sales analytics AI. Provide clear, actionable call summaries."},
+                {"role": "user", "content": summary_prompt}
+            ],
+            max_tokens=400,
+            temperature=0.7
+        )
+        
+        summary = summary_response.choices[0].message.content
+        
+        if call_id in active_sessions:
+            active_sessions[call_id]["end_time"] = datetime.now().isoformat()
+            active_sessions[call_id]["summary"] = summary
+        
+        return JSONResponse({
+            "status": "success",
+            "summary": summary,
+            "transcript_length": len(current_call_transcript)
+        })
+        
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
+
+@app.get("/get_history")
+async def get_history():
+    return JSONResponse({
+        "status": "success",
+        "history": conversation_history,
+        "has_context": bool(client_info)
+    })
+
+if __name__ == "__main__":
+    print("\n" + "="*70)
+    print("🚀 Real-Time AI Sales Assistant Starting...")
+    print("="*70)
+    print("\n✨ Features:")
+    print("   - Real-time continuous conversation")
+    print("   - AI-powered sales recommendations")
+    print("   - Client information context")
+    print("   - Live suggestions during calls")
+    print("\n🌐 Open in browser: http://127.0.0.1:8000")
+    print("="*70 + "\n")
+    
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
