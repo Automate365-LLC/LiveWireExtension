@@ -1,0 +1,17 @@
+---
+Title: Automate365 Sales SOP
+Version: v1.0
+Date: 2026-01-15
+---
+
+Q: How much does it cost?
+A: We offer three tiers starting at $99 per month. Since pricing depends on your team size, would you like me to pull up the comparison chart?
+
+Q: Does this integrate with Zapier?
+A: Yes, we have a native one-click integration with Zapier that supports over 5,000 apps. You can set it up directly in the dashboard settings.
+
+Q: Is my data secure?
+A: Absolutely. We use bank-level encryption for all data in transit and at rest. We are fully SOC2 compliant and never sell your data to third parties.
+
+Q: What if I don't like it?
+A: We offer a 14-day money-back guarantee with no questions asked. You can cancel anytime from your billing portal.
