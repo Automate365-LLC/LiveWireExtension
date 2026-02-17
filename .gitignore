@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+env/
+venv/
+ENV/
+# macOS
+.DS_Store
+# VSCode
+.vscode/
+# FastAPI/uvicorn logs
+*.log
+# Secrets
+*.env
+# Vector DB files 
+**/local_vector_db.json
+**/vector_index.bin
+*.bin
