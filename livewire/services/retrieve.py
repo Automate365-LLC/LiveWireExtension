@@ -6,6 +6,7 @@ import faiss
 from sentence_transformers import SentenceTransformer
 import logging
 import time
+import functools
 
 
 # --- CONFIGURATION ---
@@ -54,7 +55,7 @@ def get_resources():
 
     return _model, _index, _db
 
-
+@functools.lru_cache(maxsize=100)
 def retrieve_chunks(query, top_k=3):
     """
     Retrieval API and Grounding Policy Enforcement
@@ -92,9 +93,9 @@ def retrieve_chunks(query, top_k=3):
 
         record = db[idx]
         
-        # --- STUBBED LOGIC FOR SPRINT 3 ---
+        
         # We return the structure the frontend expects, but with placeholder values
-        # for 'confidence' and 'grounded' until the Reranking Logic is built in Sprint 4.
+        # for 'confidence' and 'grounded' until the Reranking Logic is built
         results.append({
             "chunk_id": record["chunk_id"],
             "score": raw_score,            # Real Vector Score

@@ -8,7 +8,7 @@ from sentence_transformers import SentenceTransformer
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PLAYBOOK_FILE = os.path.join(BASE_DIR, "gold_playbook.txt")
+PLAYBOOK_FILE = os.path.join(BASE_DIR, "..", "gold_playbook.txt")
 DB_FILE = os.path.join(BASE_DIR, "local_vector_db.json")
 INDEX_FILE = os.path.join(BASE_DIR, "vector_index.bin")
 

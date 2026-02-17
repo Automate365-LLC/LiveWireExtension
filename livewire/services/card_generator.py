@@ -39,7 +39,7 @@ def generate_cards(transcript_window: str, retrieved_chunks: List[Dict[str, Any]
         card_id = f"grounded-{chunk_id[:8]}"
 
         # Prefer source-aware titles when available
-        title = metadata.get("source", f"Insight #{i + 1}")
+        title = metadata.get("source_file", f"Insight #{i + 1}")
 
         # Enforce UI-safe body length without altering semantic meaning
         if len(content) > MAX_BODY_LENGTH:
@@ -67,8 +67,8 @@ def generate_generic_card() -> Dict[str, Any]:
     """
     return {
         "card_id": "generic-fallback",
-        "title": "Active Listening",
-        "body": "Listening for relevant playbook guidance…",
+        "title": "Need More Context",
+        "body": "No playbook guidance found. Ask the customer an open-ended question to clarify their needs.",
         "type": "generic",
         "grounded": False,
         "source_chunk_ids": []
@@ -84,7 +84,7 @@ if __name__ == "__main__":
             "plan first ($500/mo) before transitioning to the Standard plan."
         ),
         "score": 1.1,
-        "metadata": {"source": "Pricing_Playbook_v2.pdf"}
+        "metadata": {"source_file": "gold_playbook.txt"}
     }]
 
     print("--- Testing Generator ---")

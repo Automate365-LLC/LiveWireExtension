@@ -1,6 +1,6 @@
 import logging
-from retrieve import retrieve_chunks
-from card_generator import generate_cards
+from services.retrieve import retrieve_chunks
+from services.card_generator import generate_cards
 
 # --- CONFIGURATION ---
 # Hardcoded queries for reproducible regression testing.

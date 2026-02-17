@@ -3,3 +3,9 @@ uvicorn
 openai
 pypdf
 python-multipart
+
+numpy
+sentence-transformers
+faiss-cpu
+pydantic
+python-dotenv
