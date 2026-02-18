@@ -1,5 +1,5 @@
 # WS4 Architecture Draft
-**Date:** Jan 13, 2026 | **Sprint:** 1
+**Date:** Feb 12, 2026 | **Sprint:** 4
 
 ---
 
