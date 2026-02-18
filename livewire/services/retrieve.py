@@ -7,14 +7,18 @@ import logging
 import time
 import functools
 
+# Silence HuggingFace HTTP noise — model is already cached locally
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VECTOR_STORE_FILE = os.path.join(BASE_DIR, "local_vector_db.json")
 INDEX_FILE = os.path.join(BASE_DIR, "vector_index.bin")
 
 # Grounding threshold (WS4-2.2): L2 distance — lower = more similar, 0 = exact match
-# Chunks scoring >= 1.2 are considered unrelated and filtered out
-DISTANCE_THRESHOLD = 1.2
+# Chunks scoring >= 1.25 are considered unrelated and filtered out
+DISTANCE_THRESHOLD = 1.25
 
 # Logger writes to stderr so it never pollutes stdout JSON (required for WS3 integration)
 logging.basicConfig(
@@ -127,7 +131,6 @@ def retrieve_chunks(query: str, top_k: int = 3) -> list:
     - Downstream (generate.py) must treat an empty list as a fallback trigger
     """
     return list(_retrieve_cached(query, top_k))
-
 
 # --- TEST BLOCK (Evidence Pack Generator) ---
 if __name__ == "__main__":

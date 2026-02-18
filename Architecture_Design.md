@@ -75,7 +75,7 @@ Defines the JSON object returned by the retrieval engine to the generation layer
 WS4 Retrieval and Generation must enforce a **“Playbook-first” grounding policy**.
 
 - **Relevance Metric:** L2 Euclidean Distance from FAISS embeddings (lower = more relevant)  
-- **Threshold:** `1.2` (subject to tuning and embedding model dimensionality)
+- **Threshold:** `1.25` (subject to tuning and embedding model dimensionality)
 
 **Retrieval Flow(Standard Operation)**
 1. Vector Search: Retrieve Top-K (e.g., 20) raw chunks.
@@ -87,7 +87,7 @@ WS4 Retrieval and Generation must enforce a **“Playbook-first” grounding pol
 #### High Confidence Match
 **Condition:**  
 ```text
-best_match_score < 1.2
+best_match_score < 1.25
 
 Behavior:
 
@@ -101,7 +101,7 @@ WS3 must generate a Grounded Card, including citations from these chunks
 #### Low Confidence Match
 **Condition:** 
 ```text
-best_match_score >= 1.2
+best_match_score >= 1.25
 ```
 
 **Behavior:**
