@@ -16,3 +16,7 @@ ENV/
 *.log
 # Secrets
 *.env
+# Vector DB files 
+**/local_vector_db.json
+**/vector_index.bin
+*.bin
