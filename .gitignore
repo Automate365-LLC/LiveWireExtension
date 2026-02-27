@@ -1,11 +1,29 @@
+# --- LiveWire Specific ---
 .env
-__pycache__/
 *.mp3
 *.wav
 *.webm
 *.txt
 test_*.py
-
-# Ignore session evidence folders
 Evidence_Pack_*/
 session_*/
+
+# --- Python & Environment ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv
+env/
+venv/
+ENV/
+
+# --- System & IDE ---
+.DS_Store
+.vscode/
+*.log
+
+# --- Vector DB & Secrets ---
+**/local_vector_db.json
+**/vector_index.bin
+*.bin
