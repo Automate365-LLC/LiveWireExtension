@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.mp3
+*.wav
+*.webm
+*.txt
+test_*.py
+
+# Ignore session evidence folders
+Evidence_Pack_*/
+session_*/
