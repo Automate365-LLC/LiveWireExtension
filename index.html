@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Assistant</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3), transparent 50%),
+                        radial-gradient(circle at 80% 80%, rgba(74, 86, 226, 0.3), transparent 50%),
+                        radial-gradient(circle at 40% 20%, rgba(139, 92, 246, 0.2), transparent 50%);
+            animation: gradientShift 15s ease infinite;
+            z-index: 0;
+        }
+
+        @keyframes gradientShift {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            33% { transform: translate(5%, -5%) rotate(5deg); }
+            66% { transform: translate(-5%, 5%) rotate(-5deg); }
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 900px;
+            background: rgba(20, 20, 25, 0.7);
+            backdrop-filter: blur(40px);
+            border-radius: 32px;
+            padding: 48px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6),
+                        0 0 1px rgba(255, 255, 255, 0.1) inset;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff 0%, #a78bfa 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 0.95rem;
+            font-weight: 500;
+        }
+
+        #status-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #666;
+            transition: all 0.4s ease;
+        }
+
+        .status-text {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.6);
+            transition: all 0.4s ease;
+        }
+
+        body.listening #status-indicator {
+            background: rgba(34, 197, 94, 0.1);
+            border-color: rgba(34, 197, 94, 0.3);
+        }
+        body.listening .status-dot {
+            background: #22c55e;
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.6);
+            animation: pulse 2s ease-in-out infinite;
+        }
+        body.listening .status-text { color: #22c55e; }
+
+        body.speaking #status-indicator {
+            background: rgba(59, 130, 246, 0.1);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+        body.speaking .status-dot {
+            background: #3b82f6;
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.6);
+            animation: pulse 2s ease-in-out infinite;
+        }
+        body.speaking .status-text { color: #3b82f6; }
+
+        body.thinking #status-indicator {
+            background: rgba(251, 191, 36, 0.1);
+            border-color: rgba(251, 191, 36, 0.3);
+        }
+        body.thinking .status-dot {
+            background: #fbbf24;
+            box-shadow: 0 0 20px rgba(251, 191, 36, 0.6);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        body.thinking .status-text { color: #fbbf24; }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.8; }
+        }
+
+        #chat-history {
+            height: 420px;
+            overflow-y: auto;
+            padding: 24px;
+            margin-bottom: 32px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            scroll-behavior: smooth;
+        }
+
+        #chat-history::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #chat-history::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #chat-history::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+        }
+
+        #chat-history::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .msg {
+            margin-bottom: 16px;
+            display: flex;
+            animation: messageSlide 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes messageSlide {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .msg-content {
+            max-width: 70%;
+            padding: 14px 18px;
+            border-radius: 18px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            font-weight: 500;
+        }
+
+        .user-msg {
+            justify-content: flex-end;
+        }
+
+        .user-msg .msg-content {
+            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        }
+
+        .ai-msg {
+            justify-content: flex-start;
+        }
+
+        .ai-msg .msg-content {
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .controls {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            align-items: center;
+        }
+
+        button {
+            padding: 16px 40px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 16px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            font-family: 'Inter', sans-serif;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(-100%);
+            transition: transform 0.3s ease;
+        }
+
+        button:hover::before {
+            transform: translateX(0);
+        }
+
+        #startBtn {
+            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+            flex: 1;
+            max-width: 300px;
+        }
+
+        #startBtn:hover {
+            box-shadow: 0 6px 30px rgba(139, 92, 246, 0.6);
+            transform: translateY(-2px);
+        }
+
+        #startBtn:active {
+            transform: translateY(0);
+        }
+
+        #stopBtn {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);
+            flex: 1;
+            max-width: 300px;
+            display: none;
+        }
+
+        #stopBtn:hover {
+            box-shadow: 0 6px 30px rgba(239, 68, 68, 0.6);
+            transform: translateY(-2px);
+        }
+
+        #clearBtn {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 16px 24px;
+        }
+
+        #clearBtn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            color: #fff;
+        }
+
+        .permission-alert {
+            margin-top: 24px;
+            padding: 16px 20px;
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            border-radius: 12px;
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.6;
+        }
+
+        .permission-alert strong {
+            color: #fbbf24;
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        .permission-steps {
+            margin-top: 8px;
+            padding-left: 20px;
+        }
+
+        .permission-steps li {
+            margin-bottom: 4px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 32px 24px;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            #chat-history {
+                height: 320px;
+            }
+
+            .controls {
+                flex-direction: column;
+            }
+
+            #startBtn, #stopBtn {
+                max-width: 100%;
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Voice Assistant</h1>
+            <div class="subtitle">Powered by AI • Real-time Conversation</div>
+        </div>
+
+        <div id="status-indicator">
+            <div class="status-dot"></div>
+            <div class="status-text">Ready</div>
+        </div>
+
+        <div id="chat-history"></div>
+
+        <div class="controls">
+            <button id="startBtn">Start Listening</button>
+            <button id="stopBtn">Stop</button>
+            <button id="clearBtn">Clear</button>
+        </div>
+
+        <div class="permission-alert">
+            <strong>🔒 Chrome is asking permission every time?</strong>
+            This is a Chrome security feature for localhost. To fix permanently:
+            <ol class="permission-steps">
+                <li>Click the <strong>lock icon</strong> (or "Not secure") in the address bar</li>
+                <li>Click <strong>"Site settings"</strong></li>
+                <li>Find <strong>"Microphone"</strong> and change it to <strong>"Allow"</strong></li>
+                <li>Reload the page</li>
+            </ol>
+        </div>
+    </div>
+
+<script>
+    const BACKEND_URL = 'http://127.0.0.1:5000/chat';
+
+    const statusText = document.querySelector('.status-text');
+    const chatHistory = document.getElementById('chat-history');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const body = document.body;
+
+    let recognition;
+    let isActive = false;
+    let isAiTalking = false;
+    let conversation = [];
+
+    // Speech Recognition Setup - NO getUserMedia calls
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.continuous = true; // Changed to true to reduce restarts
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => {
+            console.log('Recognition started');
+            if (isActive && !isAiTalking) {
+                updateState('listening', 'Listening...');
+            }
+        };
+
+        recognition.onend = () => {
+            console.log('Recognition ended');
+            // Only restart if we're still active and AI isn't talking
+            if (isActive && !isAiTalking) {
+                setTimeout(() => {
+                    try { 
+                        recognition.start();
+                    } catch (e) {
+                        console.log('Restart prevented:', e);
+                    }
+                }, 200);
+            }
+        };
+
+        recognition.onerror = (event) => {
+            console.error('Recognition error:', event.error);
+            
+            if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+                alert('Microphone permission denied!\n\nTo fix:\n1. Click lock icon in address bar\n2. Click "Site settings"\n3. Set Microphone to "Allow"\n4. Reload page');
+                stopConversation();
+            } else if (event.error === 'no-speech') {
+                // Silent timeout, just continue
+                console.log('No speech detected, continuing...');
+            } else if (event.error === 'aborted') {
+                // Normal abortion, ignore
+                console.log('Recognition aborted normally');
+            }
+        };
+
+        recognition.onresult = (event) => {
+            const lastResult = event.results[event.results.length - 1];
+            if (lastResult.isFinal) {
+                const text = lastResult[0].transcript;
+                if (text.trim()) {
+                    handleUserInput(text);
+                }
+            }
+        };
+    } else {
+        alert('Speech recognition not supported. Use Chrome browser.');
+    }
+
+    // Text-to-Speech
+    function speak(text) {
+        isAiTalking = true;
+        recognition.stop();
+        updateState('speaking', 'Speaking...');
+
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'en-US';
+        utterance.rate = 1.1;
+        utterance.pitch = 1.0;
+
+        utterance.onend = () => {
+            console.log('Speech ended');
+            isAiTalking = false;
+            if (isActive) {
+                setTimeout(() => {
+                    try { 
+                        recognition.start();
+                        updateState('listening', 'Listening...');
+                    } catch (e) {
+                        console.log('Could not restart after speech:', e);
+                    }
+                }, 300);
+            } else {
+                updateState('idle', 'Ready');
+            }
+        };
+
+        utterance.onerror = (e) => {
+            console.error('Speech synthesis error:', e);
+            isAiTalking = false;
+            if (isActive) {
+                try { recognition.start(); } catch (e) {}
+                updateState('listening', 'Listening...');
+            }
+        };
+
+        window.speechSynthesis.speak(utterance);
+    }
+
+    // Handle User Input
+    async function handleUserInput(text) {
+        console.log('User said:', text);
+        
+        isAiTalking = true;
+        recognition.stop();
+        updateState('thinking', 'Processing...');
+
+        addMessage(text, 'user-msg');
+        conversation.push({ role: "user", content: text });
+
+        try {
+            const response = await fetch(BACKEND_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages: conversation })
+            });
+            
+            if (!response.ok) throw new Error('Server error');
+            
+            const data = await response.json();
+            
+            if (data.error) throw new Error(data.error);
+
+            addMessage(data.reply, 'ai-msg');
+            conversation.push({ role: "assistant", content: data.reply });
+            speak(data.reply);
+
+        } catch (err) {
+            console.error('Backend error:', err);
+            const errorMsg = "Connection failed. Is your server running?";
+            addMessage(errorMsg, 'ai-msg');
+            speak(errorMsg);
+            isAiTalking = false;
+            if (isActive) {
+                try { recognition.start(); } catch (e) {}
+                updateState('listening', 'Listening...');
+            }
+        }
+    }
+
+    // UI Updates
+    function updateState(state, text) {
+        body.className = state;
+        statusText.textContent = text;
+    }
+
+    function addMessage(text, className) {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `msg ${className}`;
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'msg-content';
+        contentDiv.textContent = text;
+        msgDiv.appendChild(contentDiv);
+        chatHistory.appendChild(msgDiv);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+
+    function stopConversation() {
+        isActive = false;
+        isAiTalking = false;
+        startBtn.style.display = 'block';
+        stopBtn.style.display = 'none';
+        
+        window.speechSynthesis.cancel();
+        try {
+            recognition.stop();
+        } catch (e) {
+            console.log('Stop failed:', e);
+        }
+        updateState('idle', 'Ready');
+    }
+
+    // Button Handlers
+    startBtn.onclick = () => {
+        console.log('Starting conversation...');
+        isActive = true;
+        startBtn.style.display = 'none';
+        stopBtn.style.display = 'block';
+        
+        // Prime speech synthesis
+        const init = new SpeechSynthesisUtterance('');
+        window.speechSynthesis.speak(init);
+        
+        // Start recognition - this will trigger permission request
+        try {
+            recognition.start();
+        } catch (e) {
+            console.error('Could not start recognition:', e);
+        }
+    };
+
+    stopBtn.onclick = stopConversation;
+
+    clearBtn.onclick = () => {
+        chatHistory.innerHTML = '';
+        conversation = [];
+    };
+</script>
+</body>
+</html>
