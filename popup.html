@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body { width: 200px; padding: 10px; font-family: sans-serif; text-align: center; }
+      button { 
+        width: 100%; padding: 10px; margin-bottom: 5px; cursor: pointer; 
+        color: white; border: none; border-radius: 4px; font-weight: bold;
+      }
+      #startBtn { background: #28a745; } /* Green */
+      #stopBtn { background: #dc3545; }  /* Red */
+      
+      button:disabled { background: #ccc; cursor: not-allowed; }
+      
+      #status { margin-top: 10px; font-size: 12px; color: #666; }
+    </style>
+  </head>
+  <body>
+    <h3>LiveWire</h3>
+    <button id="startBtn">Start Capture</button>
+    <button id="stopBtn" disabled>Stop Capture</button>
+    <div id="status">Ready</div>
+    <script src="popup.js"></script>
+  </body>
+</html>

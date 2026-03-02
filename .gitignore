@@ -1,22 +1,29 @@
-# Python
+# --- LiveWire Specific ---
+.env
+*.mp3
+*.wav
+*.webm
+*.txt
+test_*.py
+Evidence_Pack_*/
+session_*/
+
+# --- Python & Environment ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.env
 .venv
 env/
 venv/
 ENV/
-# macOS
+
+# --- System & IDE ---
 .DS_Store
-# VSCode
 .vscode/
-# FastAPI/uvicorn logs
 *.log
-# Secrets
-*.env
-# Vector DB files 
+
+# --- Vector DB & Secrets ---
 **/local_vector_db.json
 **/vector_index.bin
 *.bin
