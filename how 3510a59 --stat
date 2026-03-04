@@ -1,0 +1,10 @@
+[33m4c9490d[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge pull request #1 from Automate365-LLC/ws6/shrishti/demo-prep
+[33m551d8fb[m Merge pull request #5 from Automate365-LLC/ws5/aryan/artifact-quality
+[33m76f513d[m Merge pull request #6 from Automate365-LLC/ws3/aryan/suppression-engine
+[33mdae3e64[m Merge pull request #7 from Automate365-LLC/ws5/aryan/retry-safe-push
+[33m3510a59[m Merge pull request #8 from Automate365-LLC/ws4/vedanshi/retrieval-api-v1
+[33m767bf62[m[33m ([m[1;31morigin/ws4/vedanshi/retrieval-api-v1[m[33m, [m[1;32mws4/vedanshi/retrieval-api-v1[m[33m)[m ws4 chore: remove gold_playbook.txt, add gold_playbook.pdf
+[33m94a671b[m feat(ws4): grounding enforcement v1.1
+[33mdbcd616[m feat(ws4): retrieval quality + caching v1
+[33m4ce933e[m feat(retrieve): implement S4-WS4-2 retrieval quality and caching v1
+[33m2addc48[m feat(ingest): upgrade ingestion to v1.1 with PDF/OCR support and metadata

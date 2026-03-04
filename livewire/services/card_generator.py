@@ -1,7 +1,7 @@
 import json
 import logging
 from typing import List, Dict, Any
-from config import GROUNDING_THRESHOLD
+from services.config import GROUNDING_THRESHOLD
 
 # --- CONFIGURATION ---
 # Logs go to stderr — does not interfere with JSON output sent to stdout 

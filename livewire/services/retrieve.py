@@ -10,7 +10,7 @@ from sentence_transformers import SentenceTransformer
 import logging
 import time
 import functools
-from config import GROUNDING_THRESHOLD
+from services.config import GROUNDING_THRESHOLD
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

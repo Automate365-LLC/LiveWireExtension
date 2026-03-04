@@ -1,7 +1,10 @@
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import logging
 from services.retrieve import retrieve_chunks
 from services.card_generator import generate_cards
-
 # --- CONFIGURATION ---
 # Hardcoded queries for reproducible regression testing.
 # Mix of Hits (expect grounded), Misses (chit-chat), and Noise (irrelevant)
@@ -39,7 +42,7 @@ def run_evaluation():
         query = case["query"]
 
         # --- Run pipeline ---
-        chunks = retrieve_chunks(query)
+        chunks = list(retrieve_chunks(query))
         try:
             cards = generate_cards(query, chunks)
         except Exception as e:
