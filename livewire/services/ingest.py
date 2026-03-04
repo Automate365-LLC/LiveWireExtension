@@ -7,8 +7,6 @@ import faiss
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
 from pypdf import PdfReader
-import pytesseract
-from pdf2image import convert_from_path
 
 # --- CONFIGURATION ---
 # All file paths are relative to this script's location
@@ -16,10 +14,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PLAYBOOK_FILE = os.path.join(BASE_DIR, "..", "gold_playbook.pdf")   # input PDF
 VECTOR_STORE_FILE = os.path.join(BASE_DIR, "local_vector_db.json")  # output: chunk records
 INDEX_FILE = os.path.join(BASE_DIR, "vector_index.bin")             # output: FAISS vector index
-
-# Paths to Windows OCR binaries (only used if PDF is image-based)
-pytesseract.pytesseract.tesseract_cmd = r"C:\Users\vedan\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
-POPPLER_PATH = r"C:\Users\vedan\poppler-25.12.0\Library\bin"
 
 # --- MODEL (lazy-loaded) ---
 # SentenceTransformer is only loaded when first needed,
@@ -36,31 +30,12 @@ def get_model():
 
 # --- TEXT EXTRACTION ---
 def extract_page_text(page, page_num):
-    """
-    Extract raw text from a single PDF page.
-    - First tries pypdf (fast, works on text-based PDFs)
-    - If pypdf returns nothing, the page is image-based — falls back to Tesseract OCR
-    """
+    """Extract text directly via pypdf — works on proper text-based PDFs."""
     text = page.extract_text()
     if text and text.strip():
         return text
-
-    # pypdf got nothing — run OCR on this page
-    print(f"   [OCR] Page {page_num} is image-based, running Tesseract...")
-    try:
-        # Convert just this page to a high-res image, then OCR it
-        images = convert_from_path(
-            PLAYBOOK_FILE, dpi=300,
-            first_page=page_num, last_page=page_num,
-            poppler_path=POPPLER_PATH
-        )
-        if images:
-            return pytesseract.image_to_string(images[0], lang='eng')
-    except Exception as e:
-        print(f"   [OCR] ERROR on page {page_num}: {e}")
-
-    return ""  # nothing extracted — caller will skip this page
-
+    print(f"   [WARN] Page {page_num}: pypdf returned no text.")
+    return ""
 
 # --- CHUNKING ---
 def chunk_page_text(page_text):
@@ -82,7 +57,7 @@ def chunk_page_text(page_text):
     sized_chunks = []
 
     # Stage 1: split on paragraph/Q&A boundaries (double newlines)
-    for semantic_chunk in re.split(r'\n\n+', page_text):
+    for semantic_chunk in re.split(r'(?=Q:)|\n\n+', page_text):
         semantic_chunk = semantic_chunk.strip()
         if not semantic_chunk:
             continue
@@ -137,7 +112,6 @@ def detect_section(page_text):
     """
     Find the last heading on the page to use as section metadata.
     Headings are detected as: short, ALL-CAPS lines with no trailing period.
-    This is used later by WS4-14 reranking to boost results from matching sections.
     """
     section = None
     for line in page_text.splitlines():
@@ -156,7 +130,7 @@ def ingest_playbook():
     print(f"--- INGESTING: {os.path.basename(PLAYBOOK_FILE)} ---")
 
     database_records = []  # list of chunk dicts to save as JSON
-    text_list = []         # plain text list for embedding model
+    text_list = [] # plain text list for embedding model
 
     reader = PdfReader(PLAYBOOK_FILE)
     print(f"   -> {len(reader.pages)} page(s) found")
