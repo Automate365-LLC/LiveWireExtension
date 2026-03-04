@@ -1,5 +1,5 @@
 # WS4 Architecture Draft
-**Date:** Feb 12, 2026 | **Sprint:** 4
+**Date:** Feb 12, 2026 | **Last Updated:** Feb 25, 2026 | **Sprint:** 6
 
 ---
 
@@ -64,6 +64,8 @@ Defines the JSON object returned by the retrieval engine to the generation layer
   "text_content": "String (The raw text to be used for RAG)",
   "metadata": {
     "source_file": "String",
+    "page": "Integer",
+    "section": "String (last heading detected on page)",
     "ingested_at": "Timestamp"
   }
 }
@@ -153,7 +155,7 @@ Returns a JSON array of card objects:
 **Control Flow Logic**
 
 #### 1. No-Source Condition
-- Trigger: retrieved_chunks is empty or below WS4-2.2 threshold (≥1.5).  
+- Trigger: retrieved_chunks is empty or below WS4-2.2 threshold (≥1.25).  
 - Action: Generate 1 generic fallback card.  
 - Props: `grounded=false`, `source_chunk_ids=[]`
 
@@ -191,7 +193,7 @@ A dedicated REST endpoint for testing retrieval logic without WebSocket streamin
 **Overview:** Defines the constraints and mechanisms for uploading Playbooks into the Workspace 4 environment.
 
 ### 3.1 Constraints
-- **Supported Formats:** .txt, .docx, .pdf(optional/stretch)  
+- **Supported Formats:** .pdf (implemented), .docx (stretch)
 - **Maximum File Size:** 10MB  
 - **Required Metadata Fields (per Chunk):**  
   - `source_file`: String - The name of the uploaded playbook  
@@ -286,7 +288,7 @@ A dedicated REST endpoint for testing retrieval logic without WebSocket streamin
 **Overview:** These are the conditions required to mark the Playbook feature as "shippable" for the Sprint 3 Internal Demo.
 
 ### 5.1 Success Scenario (Happy Path)
-1. Setup: User uploads "gold_playbook.txt" to Workspace A.
+1. Setup: User uploads "gold_playbook.pdf" to Workspace A.
 2. Action: User simulates a call or text input asking about pricing (e.g., "How much does it cost?").
 3. Verification: System retrieves the specific pricing chunk from the text file.
 4. Output (Example): "We offer tiers starting at $99/month. Shall I pull up the comparison?" (Must contain correct data from file).
