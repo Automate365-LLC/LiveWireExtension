@@ -15,7 +15,8 @@
     "https://meet.google.com/*",
     "https://zoom.us/*",
     "https://www.youtube.com/*",
-    "http://localhost:5000/*"
+    "http://localhost:5000/*",
+    "https://teams.microsoft.com/*"
   ],
   "background": {
     "service_worker": "background.js"
