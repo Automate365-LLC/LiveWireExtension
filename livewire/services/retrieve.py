@@ -11,7 +11,10 @@ import logging
 import time
 import uuid
 import functools
-from config import GROUNDING_THRESHOLD
+try:
+    from services.config import GROUNDING_THRESHOLD
+except ModuleNotFoundError:
+    from config import GROUNDING_THRESHOLD
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

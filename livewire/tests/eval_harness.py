@@ -1,5 +1,7 @@
 import sys
 import os
+import json
+from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import logging
@@ -37,6 +39,7 @@ def run_evaluation():
 
     passed_tests = 0
     total_hallucinations = 0
+    results_log = []  # collects per-query results for replay log
 
     for case in TEST_CASES:
         query = case["query"]
@@ -51,7 +54,6 @@ def run_evaluation():
 
         # --- Analyze output ---
         has_grounded = any(c.get("grounded") for c in cards)
-        has_fallback = any(not c.get("grounded") for c in cards) or len(cards) == 0
 
         # --- Grading ---
         status = "FAIL"
@@ -79,21 +81,47 @@ def run_evaluation():
                     total_hallucinations += 1
                     print(f"🚨 DATA MISMATCH: Card body not found in source text for '{query}'")
 
-        # --- Safe display for table ---
+        # --- display for table ---
         query_display = query if len(query) <= 50 else query[:47] + "..."
         card_type = cards[0].get("type") if cards else "N/A"
-
         print(f"{query_display:<50} | {len(chunks):<5} | {card_type:<15} | {status}")
 
+        # --- Build replay log entry ---
+        results_log.append({
+            "query": query,
+            "expect_hit": case["expect_hit"],
+            "chunks_found": len(chunks),
+            "chunk_ids": [c["chunk_id"][:8] for c in chunks],
+            "card_type": card_type,
+            "grounded": has_grounded,
+            "result": status,
+            "source_chunk_ids": cards[0].get("source_chunk_ids", []) if cards else []
+        })
+        
+
+    # --- Final summary ---
     print("-" * 90)
     print(f"Final Score: {passed_tests}/{len(TEST_CASES)}")
     print(f"Total Hallucinations Detected: {total_hallucinations}")
 
-    # Clear, professional final message
     if passed_tests == len(TEST_CASES):
         print("✅ All test cases passed. Grounded generator ready for downstream integration.")
     else:
-        print("⚠️ Some tests failed or grounding thresholds were not met. Review retrieval settings or expectations.")
+        print("⚠️ Some tests failed. Review retrieval settings or playbook content.")
+
+    # --- Save replay log as evidence ---
+    log_path = os.path.join(os.path.dirname(__file__), "replay_log.json")
+    replay_log = {
+        "run_at": str(datetime.now()),
+        "score": f"{passed_tests}/{len(TEST_CASES)}",
+        "hallucinations": total_hallucinations,
+        "passed": passed_tests == len(TEST_CASES),
+        "results": results_log
+    }
+    with open(log_path, "w") as f:
+        json.dump(replay_log, f, indent=2)
+    print(f"\nReplay log saved → {log_path}")
+
 
 if __name__ == "__main__":
     run_evaluation()
