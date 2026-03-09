@@ -2,30 +2,18 @@ const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const statusDiv = document.getElementById('status');
 
-// Restore button states on popup open
 chrome.storage.local.get(['isRecording'], (res) => {
     updateUI(!!res.isRecording);
 });
 
-startBtn.addEventListener('click', async () => {
-    statusDiv.innerText = "Checking permissions...";
-    
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(t => t.stop());
-    } catch (err) {
-        statusDiv.innerText = "Mic access denied.";
-        return;
-    }
-
-    statusDiv.innerText = "Initializing...";
+startBtn.addEventListener('click', () => {
+    statusDiv.innerText = "Starting...";
 
     chrome.runtime.sendMessage({ type: 'START_RECORDING', target: 'background' }, (res) => {
         if (chrome.runtime.lastError || !res) {
             statusDiv.innerText = "Background service error.";
             return;
         }
-
         if (res.success) {
             chrome.storage.local.set({ isRecording: true }, () => updateUI(true));
         } else {
@@ -37,7 +25,7 @@ startBtn.addEventListener('click', async () => {
 stopBtn.addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'STOP_RECORDING', target: 'offscreen' });
     chrome.runtime.sendMessage({ type: 'STOP_ACKNOWLEDGED', target: 'background' });
-    
+
     chrome.storage.local.set({ isRecording: false }, () => {
         updateUI(false);
         statusDiv.innerText = "Stopped.";
