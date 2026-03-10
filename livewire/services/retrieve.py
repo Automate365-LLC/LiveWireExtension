@@ -122,7 +122,6 @@ def _run_retrieval(query: str, top_k: int) -> list:
         }
         for r in results
     ]
-
     logger.info(
         f"[{query_id}] Retrieved {len(results)} chunks | "
         f"Latency: {latency_ms:.2f}ms | "
