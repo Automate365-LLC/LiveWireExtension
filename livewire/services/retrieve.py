@@ -1,24 +1,28 @@
-import json
 import os
+# Silence HuggingFace HTTP noise — model is already cached locally
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+
+import json
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 import logging
 import time
+import uuid
 import functools
-
-# Silence HuggingFace HTTP noise — model is already cached locally
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_HUB_OFFLINE"] = "1"
+try:
+    from services.config import GROUNDING_THRESHOLD
+except ModuleNotFoundError:
+    from config import GROUNDING_THRESHOLD
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VECTOR_STORE_FILE = os.path.join(BASE_DIR, "local_vector_db.json")
 INDEX_FILE = os.path.join(BASE_DIR, "vector_index.bin")
 
-# Grounding threshold (WS4-2.2): L2 distance — lower = more similar, 0 = exact match
-# Chunks scoring >= 1.25 are considered unrelated and filtered out
-DISTANCE_THRESHOLD = 1.25
+
+DISTANCE_THRESHOLD = GROUNDING_THRESHOLD
 
 # Logger writes to stderr so it never pollutes stdout JSON (required for WS3 integration)
 logging.basicConfig(
@@ -59,8 +63,10 @@ def _run_retrieval(query: str, top_k: int) -> list:
     Separated from the cached wrapper so lru_cache works correctly
     (lru_cache requires the decorated function to return a hashable/immutable value —
     keeping the return as a list of dicts is fine here since we don't mutate it).
+    NOTE: cache hits bypass this function — query_id only appears on cold start logs.
     """
     model, index, db = get_resources()
+    query_id = str(uuid.uuid4())[:8]  # short ID to trace this specific query
 
     if index is None or db is None:
         logger.warning("Search aborted: index or database not loaded")
@@ -88,22 +94,36 @@ def _run_retrieval(query: str, top_k: int) -> list:
 
         record = db[idx]
 
-        # confidence + grounded are stubs until WS4-14 reranking is implemented
+        # Normalize L2 distance → 0-1 confidence scale
+        # score=0.0 (exact match) → 1.0 | score=threshold → 0.0 | clamped to [0,1]
+        confidence = round(max(0.0, min(1.0, 1.0 - (raw_score / DISTANCE_THRESHOLD))), 2)
+
+        # grounded=True is valid — chunk explicitly passed threshold check above
+        # Future: a cross-encoder reranker can refine confidence scoring
         results.append({
             "chunk_id": record["chunk_id"],
-            "score": raw_score,       # real L2 distance from FAISS
-            "confidence": 0.95,       # STUB: hardcoded until reranking built
-            "grounded": True,         # STUB: assumed true if it passed threshold
+            "score": raw_score,        # raw L2 distance from FAISS
+            "confidence": confidence,  # normalized 0-1
+            "grounded": True,          
             "text_content": record["text_content"],
             "metadata": record.get("metadata", {})
         })
 
     latency_ms = (time.perf_counter() - start_time) * 1000
 
+    #Evidence pack log — chunk ID, score, source metadata, latency
     # NOTE: this only fires on cold start — cache hits bypass this function entirely
-    logged_data = [{"id": r["chunk_id"][:8], "score": round(r["score"], 3)} for r in results]
+    logged_data = [
+        {
+            "id": r["chunk_id"][:8],
+            "score": round(r["score"], 3),
+            "source": r["metadata"].get("source_file", "unknown"),
+            "page": r["metadata"].get("page", "?")
+        }
+        for r in results
+    ]
     logger.info(
-        f"Retrieved {len(results)} chunks | "
+        f"[{query_id}] Retrieved {len(results)} chunks | "
         f"Latency: {latency_ms:.2f}ms | "
         f"Matches: {logged_data}"
     )
@@ -112,7 +132,7 @@ def _run_retrieval(query: str, top_k: int) -> list:
 
 
 # NOTE: all args must stay hashable (str, int) for lru_cache to work
-# If you add workspace_id dicts or filter objects later, switch to a manual dict cache
+# If add workspace_id dicts or filter objects later, switch to a manual dict cache
 @functools.lru_cache(maxsize=100)
 def _retrieve_cached(query: str, top_k: int = 3) -> tuple:
     """

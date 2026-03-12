@@ -1,5 +1,6 @@
 # --- LiveWire Specific ---
 .env
+*.env
 *.mp3
 *.wav
 *.webm
@@ -26,4 +27,6 @@ ENV/
 # --- Vector DB & Secrets ---
 **/local_vector_db.json
 **/vector_index.bin
+**/replay_log.json
+**/load_test_log.json
 *.bin

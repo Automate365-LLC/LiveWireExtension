@@ -1,6 +1,10 @@
 import json
 import logging
 from typing import List, Dict, Any
+try:
+    from services.config import GROUNDING_THRESHOLD
+except ModuleNotFoundError:
+    from config import GROUNDING_THRESHOLD
 
 # --- CONFIGURATION ---
 # Logs go to stderr — does not interfere with JSON output sent to stdout 
@@ -10,7 +14,6 @@ logger = logging.getLogger(__name__)
 # Max card body length — keeps cards readable and UI-safe
 MAX_BODY_LENGTH = 300
 
-GROUNDING_THRESHOLD = 1.25  # L2 distance threshold for grounding
 def generate_cards(transcript_window: str, retrieved_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     S4-WS4-3 Grounding Enforcement — converts retrieved chunks into battle cards.
