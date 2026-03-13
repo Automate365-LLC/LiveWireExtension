@@ -1,9 +1,20 @@
+chrome.action.setPopup({ popup: 'popup.html' });
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'HEARTBEAT') {
+    sendResponse({ alive: true });
+    return true;
+  }
   if (message.type === 'GET_STATUS') {
-    sendResponse({ isRecording: false });
+    chrome.storage.local.get(['isRecording', 'resumableUrl', 'resumeWindowEnds'], (data) => {
+      const canResume = data.resumableUrl && Date.now() < data.resumeWindowEnds;
+      sendResponse({ isRecording: !!data.isRecording, canResume: !!canResume });
+    });
     return true;
   }
   if (message.type === 'STOP_ACKNOWLEDGED') {
+    chrome.storage.local.set({ isRecording: false, capturedTabId: null, resumableUrl: null, resumeWindowEnds: null });
+    chrome.action.setBadgeText({ text: '' });
     sendResponse({ success: true });
     return true;
   }
@@ -13,76 +24,90 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Poll chrome.storage every 500ms until micPermissionGranted is set (by mic-permission.html)
-function waitForMicPermission(timeoutMs = 60000) {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const interval = setInterval(async () => {
-      const stored = await chrome.storage.local.get(['micPermissionGranted', 'micPermissionTime']);
-      if (stored.micPermissionGranted) {
-        clearInterval(interval);
-        resolve(true);
-      } else if (Date.now() - start > timeoutMs) {
-        clearInterval(interval);
-        reject(new Error('Mic permission timed out — did you click Allow?'));
+// Trigger 60-second resume window upon tab closure
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const { capturedTabId, capturedUrl } = await chrome.storage.local.get(['capturedTabId', 'capturedUrl']);
+  
+  if (tabId === capturedTabId) {
+    console.log('[TAB-CLOSED] Captured tab closed. Starting resume window.');
+    
+    chrome.storage.local.set({ 
+      isRecording: false, 
+      capturedTabId: null,
+      resumableUrl: capturedUrl,
+      resumeWindowEnds: Date.now() + 60000 
+    });
+    
+    try {
+      await chrome.runtime.sendMessage({ type: 'STOP_RECORDING', target: 'offscreen' });
+    } catch (_) {}
+  }
+});
+
+// Detect reopened meetings and alert the user
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url) {
+    const { resumableUrl, resumeWindowEnds } = await chrome.storage.local.get(['resumableUrl', 'resumeWindowEnds']);
+    
+    if (resumableUrl && Date.now() < resumeWindowEnds) {
+      const savedOrigin = new URL(resumableUrl).origin;
+      const currentOrigin = new URL(tab.url).origin;
+      
+      if (savedOrigin === currentOrigin) {
+        chrome.action.setBadgeText({ text: 'RESUME', tabId: tabId });
+        chrome.action.setBadgeBackgroundColor({ color: '#FF0000', tabId: tabId });
       }
-    }, 500);
-  });
-}
+    } else if (resumeWindowEnds && Date.now() >= resumeWindowEnds) {
+      chrome.storage.local.remove(['resumableUrl', 'resumeWindowEnds']);
+      chrome.action.setBadgeText({ text: '', tabId: tabId });
+    }
+  }
+});
 
 async function initializeCapture(sendResponse) {
   try {
-    // Check if mic already granted from a previous session
-    const stored = await chrome.storage.local.get(['micPermissionGranted']);
+    chrome.storage.local.remove(['resumableUrl', 'resumeWindowEnds']);
+    chrome.action.setBadgeText({ text: '' });
 
-    if (!stored.micPermissionGranted) {
-      // Open the permission tab
-      chrome.tabs.create({
-        url: chrome.runtime.getURL('mic-permission.html'),
-        active: true
-      });
-
-      // Wait until mic-permission.html writes to storage
-      try {
-        await waitForMicPermission(60000);
-      } catch (e) {
-        sendResponse({ success: false, error: e.message });
-        return;
-      }
-    }
-
-    // Ensure offscreen document exists
     const existing = await chrome.runtime.getContexts({
       contextTypes: ['OFFSCREEN_DOCUMENT'],
       documentUrls: [chrome.runtime.getURL('offscreen.html')]
     });
 
-    if (existing.length === 0) {
+    if (existing.length > 0) {
+      console.log('[INIT] Offscreen exists. Stopping old capture.');
+      try {
+        await chrome.runtime.sendMessage({ type: 'STOP_RECORDING', target: 'offscreen' });
+      } catch (_) {}
+      await new Promise(r => setTimeout(r, 300));
+    } else {
       await chrome.offscreen.createDocument({
         url: 'offscreen.html',
         reasons: ['USER_MEDIA', 'AUDIO_PLAYBACK'],
         justification: 'Required for audio capture'
       });
+      await new Promise(r => setTimeout(r, 300));
     }
 
-    // Get active tab
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
-      sendResponse({ success: false, error: 'Cannot capture a restricted tab' });
+      sendResponse({ success: false, error: 'Cannot capture this tab' });
       return;
     }
 
-    const tabUrl = tab.url;
-
-    // Get streamId and send IMMEDIATELY — token expires in ~1s
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
 
     await chrome.runtime.sendMessage({
       type: 'INIT_AUDIO',
       target: 'offscreen',
-      data: { streamId: streamId, url: tabUrl }
+      data: { streamId: streamId, url: tab.url }
     }).catch((e) => console.warn('INIT_AUDIO send failed:', e));
 
+    await chrome.storage.local.set({ isRecording: true, capturedTabId: tab.id, capturedUrl: tab.url });
+    
+    chrome.action.setBadgeText({ text: 'REC', tabId: tab.id });
+    chrome.action.setBadgeBackgroundColor({ color: '#00FF00', tabId: tab.id });
+    
     sendResponse({ success: true });
   } catch (err) {
     console.error('initializeCapture error:', err);
